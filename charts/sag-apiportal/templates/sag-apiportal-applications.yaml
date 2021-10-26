@@ -1,0 +1,467 @@
+# choose list of microservice applications to install based on selected product
+{{- $applications:= index $.Values "products" "listOfApplications" $.Values.product }}
+#all applications for product {{ .Values.product }}: {{- printf "%v" $applications }}
+{{ range $app:= $applications }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $.Release.Name }}-{{ $app }}
+  labels:
+    app: {{ $.Release.Name }}-{{ $app }}
+spec:
+  replicas: {{ if (eq (index $.Values "applications" $app "replicas") -1.0 ) }} {{ $.Values.applications.default.replicas }} {{ else }} {{ index $.Values "applications" $app "replicas" }} {{ end }}
+#  replicas: {{ $.Values.applications.default.replicas }}
+  selector:
+    matchLabels:
+      product: "softwareag-{{ $.Values.product}}"
+      app: {{ $.Release.Name }}-{{ $app }}
+  serviceName: {{ $.Release.Name }}-{{ $app }}
+  template:
+    metadata:
+{{- if and ($.Values.monitoring) (ne "kibana" $app) }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9601"
+{{- end }}
+      labels:
+        product: "softwareag-{{ $.Values.product}}"
+        app: {{ $.Release.Name }}-{{ $app }}
+    spec:
+{{- if $.Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml $.Values.nodeSelector | indent 8 }}
+{{- end }}
+{{- if $.Values.tolerations }}
+      tolerations:
+{{ toYaml $.Values.tolerations | indent 8 }}
+{{- end }}
+      initContainers:
+      - name: waitforzookeeper
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-admin-tools:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{$.Values.image.pullPolicy | default "always" | quote}}
+        securityContext:
+          runAsUser: 0
+        command:
+          - bash
+          - -ec
+          - |
+{{ tpl ($.Files.Get "files/preflight-check.sh") $ | indent 14 }}
+      #while normally considered unsafe (see comments in https://kubernetes.io/docs/tasks/run-application/force-delete-stateful-set-pod/), since we do not need a hard (but soft :-)) "each ID exactly once" guarantee for our application statefulset pods
+      terminationGracePeriodSeconds: 0
+      containers:
+      - name: {{ $app }}
+{{- if (eq (index $.Values "applications" $app "version") "UNSET" ) }}
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-{{ $app }}:{{ index $.Values "products" "version" $.Values.product }}
+{{- else }}
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-{{ $app }}:{{ index $.Values "applications" $app "version" }}
+{{- end }}
+        imagePullPolicy: {{ $.Values.image.pullPolicy | default "always" | quote }}
+{{- if eq "kibana" $app }}
+        command:
+          - bash
+          - -ec
+          - |
+              sed -i 's/log\/plugin.stdout.log 2>&1/\/dev\/null/g' /aris/plugin/launch-plugin.sh
+              exec /docker-entrypoint.sh
+{{- end }}
+{{- if (index $.Values "applications" $app "securityContext") }}
+        securityContext:
+          runAsUser: {{ (index $.Values "applications" $app "securityContext" "runAsUser") }}
+{{- end }}
+        env:
+        - name: zookeeper_connect_string
+          value: {{ $.Release.Name }}-zookeeper:{{ $.Values.zookeeper.service.port | default 14281 }}
+{{- if (ne "UNSET" (index $.Values "applications" $app "sizing" "java" "Xmx")) }}
+        - name: Xmx
+          value: {{ (index $.Values "applications" $app "sizing" "java" "Xmx") | quote}}
+{{- end }}
+{{- if (ne "UNSET" (index $.Values "applications" $app "sizing" "tomcat" "connector" "http" "maxThreads")) }}
+        - name: connector_http_executor_maxThreads
+          value: {{ (index $.Values "applications" $app "sizing" "tomcat" "connector" "http" "maxThreads") | quote}}
+{{- end }}
+{{- if (ne "UNSET" (index $.Values "applications" $app "sizing" "tomcat" "connector" "ajp" "maxThreads")) }}
+        - name: connector_ajp_executor_maxThreads
+          value: {{ (index $.Values "applications" $app "sizing" "tomcat" "connector" "ajp" "maxThreads") | quote}}
+{{- end }}
+{{- if or (eq "api" $app) (eq "portalserver" $app) (eq "umcadmin" $app) (eq "collaboration" $app)}}
+        - name: USER_CATALINA_OPTS
+          valueFrom:
+            configMapKeyRef:
+                name: {{ $.Release.Name }}-env-conf
+                key: jvm_opts
+{{- if eq $app "api" }}
+        - name: SAG_INSTALL_ROOT
+          value: /apiportal-metering
+{{- end }}
+{{- end }}
+{{- if and (eq "collaboration" $app) }}
+        - name: ecp_env_platform_name
+          value: "WEB_METHODS_API_PORTAL_RL"
+{{- end }}
+{{- if and (eq "kibana" $app) }}
+        - name: KIBANA__elasticsearch__hosts
+          value: "http://{{ $.Release.Name}}-elasticsearch:14220"
+        - name: KIBANA__elasticsearch__password
+          valueFrom:
+            secretKeyRef:
+               name: {{ $.Release.Name }}-es-secret
+               key: password
+        - name: KIBANA__elasticsearch__startupTimeout
+          value: '20000'
+        - name: KIBANA__elasticsearch__username
+          value: aris
+{{- end }}
+{{- if and (eq "adsadmin" $app) (eq "DB" $.Values.applications.adsadmin.storage.mode)}}
+        - name: USER_CATALINA_OPTS
+          value: "-Dcom.aris.ads.filesystem.active=false"
+{{- else if and (eq "adsadmin" $app) (eq "fileShare" $.Values.applications.adsadmin.storage.mode) }}
+        - name: USER_CATALINA_OPTS
+          value: "-Dcom.aris.ads.filesystem.active=true"
+{{- end }}
+{{- if and ($.Values.monitoring) (ne "kibana" $app) }}
+        - name: ENABLE_PROMETHEUS_AGENT
+          value: "true"
+{{- end }}
+        - name: sag_product
+          value: {{ $.Values.product | quote}}
+        - name:  REDIRECT_LOGFILES
+          value: {{ $.Values.logs.redirectLogfiles | quote }}
+{{- if ne "collaboration" $app }}
+        - name: HOSTNAME
+          value: {{ $.Release.Name }}-{{ $app }}
+{{- else }}
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+{{- end }}
+        - name: instance_id
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+{{- if and ($.Values.monitoring) (ne "kibana" $app) }}
+        ports:
+        - containerPort: 9601
+          name: prometheus-port
+{{- end }}
+{{- if or (and (eq "adsadmin" $app) (ne "DB" $.Values.applications.adsadmin.storage.mode)) ( eq $.Values.logs.enabled true ) ( eq $.Values.enhancements.enabled true )}}        
+        volumeMounts:
+{{-  if eq $.Values.logs.enabled true }}  
+          - mountPath: /logs
+            name: logs-volume
+{{- end }} 
+{{- if eq "api" $app }}
+          - name: portal-version
+            mountPath: /aris/version.txt
+            subPath: version.txt
+{{- end }}           
+{{- if and (eq "adsadmin" $app) (ne "DB" $.Values.applications.adsadmin.storage.mode)}}
+          - mountPath: /data
+            name: data-volume
+            subPath: ads-data
+{{- end }}
+{{- if eq $.Values.enhancements.enabled true }}
+          - mountPath: /autoenhancements
+            name: jdbc
+{{- end }}
+{{- end }}
+        livenessProbe:
+{{- if and (ne "accserver" $app) (ne "kibana" $app) }}
+           httpGet:
+             path: {{ (index $.Values "applications" $app "healthCheck") }}
+             port: 8080
+{{- else }}
+           exec:
+             command:
+             - {{ (index $.Values "applications" $app "healthCheck") }}
+{{- end }}
+           failureThreshold: 3
+           initialDelaySeconds: {{ (index $.Values "applications" $app "initialDelaySeconds") }}
+           periodSeconds: 10
+           successThreshold: 1
+           timeoutSeconds: 5
+        readinessProbe:
+{{- if and (ne "accserver" $app) (ne "kibana" $app) }}
+           httpGet:
+             path: {{ (index $.Values "applications" $app "healthCheck") }}
+             port: 8080
+{{- else }}
+           exec:
+             command:
+             - {{ (index $.Values "applications" $app "healthCheck") }}
+{{- end }}
+           failureThreshold: 3
+           initialDelaySeconds: 30
+           periodSeconds: 10
+           successThreshold: 1
+           timeoutSeconds: 5
+        resources:
+          requests:        
+            memory: {{ (index $.Values "applications" $app "sizing" "resources" "requests" "memory" ) | quote }}
+            cpu: {{ (index $.Values "applications" $app "sizing" "resources" "requests" "cpu" ) | quote }}
+{{- if  and (eq $.Values.logs.deployRedirectLogContainer true) (eq $.Values.logs.enabled true) }}
+      - name: "{{ $app }}logs"
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}redirect-logs:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{ $.Values.image.pullPolicy | default "always" | quote }}
+        command:
+          - bash
+          - -ec
+          - |
+              exec /consolelog.sh
+        env:
+        - name: app_type
+          value: {{ (index $.Values "applications" $app "app_type") | quote }}
+        - name: instance_id
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+          - mountPath: /logs
+            name: logs-volume
+        resources:
+           requests:
+             memory: "50Mi"
+             cpu: "50m"
+           limits:
+             memory: {{ $.Values.logs.memoryLimit | quote }}
+             cpu: {{ $.Values.logs.cpuLimit | quote }}
+{{- end }}
+{{- if eq $.Values.image.servicePrincipal false }}
+      imagePullSecrets:
+      - name: {{ $.Values.image.registrySecret }}
+{{- end }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                    - {{ $.Release.Name }}-{{ $app }}
+                topologyKey: {{$.Values.NODE_TOPOLOGY_KEY | default "kubernetes.io/hostname" | quote}}
+{{- if or (and (eq "adsadmin" $app) (ne "DB" $.Values.applications.adsadmin.storage.mode)) ( eq $.Values.logs.enabled true ) ( eq $.Values.enhancements.enabled true )}}        
+      volumes:
+{{- if eq "api" $app }}
+      - name: portal-version
+        configMap:
+          name: {{ $.Release.Name }}-portal-version
+{{- end }}
+{{- if eq $.Values.logs.enabled true }}  
+      - name: logs-volume
+        persistentVolumeClaim:
+          claimName: {{ $.Release.Name }}-{{ $.Values.logs.pvcName}}
+{{- end }}
+{{- if and (eq "adsadmin" $app) (ne "DB" $.Values.applications.adsadmin.storage.mode) }}          
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: {{ $.Release.Name }}-{{ $.Values.applications.adsadmin.storage.pvcName }}
+{{- end }}
+{{- if eq $.Values.enhancements.enabled true }}
+      - name: jdbc
+        persistentVolumeClaim:
+          claimName: {{ $.Release.Name }}-{{ $.Values.enhancements.pvcName}}
+{{- end }}
+{{- end }}                      
+---
+apiVersion: v1
+kind: Service
+metadata:
+   name: {{ $.Release.Name }}-{{ $app }}
+   labels:
+     product: "softwareag-{{ $.Values.product}}"
+spec:
+  selector:
+    app: {{ $.Release.Name}}-{{ $app }}
+  #clusterIP: None
+  ports:
+{{- if ne "kibana" $app }}
+  - name: connect-port
+    protocol: TCP
+    port: 8080
+    targetPort: 8080
+  - name: ajp-port
+    protocol: TCP
+    port: 8009
+{{- else }}
+  - name: connect-port
+    protocol: TCP
+    port: 18069
+    targetPort: 18069
+{{- end }}
+{{- if and ($.Values.monitoring) (ne "kibana" $app) }}
+  - name: prometheus-port
+    protocol: TCP
+    port: 9601
+    targetPort: 9601
+{{- end }}
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 1800
+---
+apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $.Release.Name }}-{{ $app }}-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      product: "softwareag-{{ $.Values.product}}"
+      app: {{ $.Release.Name }}-{{ $app }}
+---
+{{- if index $.Values "applications" $app "autoscale" }}
+apiVersion: autoscaling/v2beta1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $.Release.Name}}-{{ $app }}-memory
+spec:
+  maxReplicas: {{ index $.Values "applications" $app "maxReplica" }}
+  minReplicas: {{ if (eq (index $.Values "applications" $app "replicas") -1.0 ) }} {{ $.Values.applications.default.replicas }} {{ else }} {{ index $.Values "applications" $app "replicas" }} {{ end }}
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: {{ $.Release.Name}}-{{ $app }}
+  metrics:
+  - type: Resource
+    resource:
+      name: memory
+      targetAverageUtilization: 80
+---
+{{- end }}
+{{- end }} #end range
+apiVersion: v1
+kind: Service
+metadata:
+   name: api
+   labels:
+     product: "softwareag-{{ .Values.product}}"
+spec:
+  selector:
+    app: {{ .Release.Name}}-api
+  ports:
+  - name: connect-port
+    protocol: TCP
+    port: 10081
+    targetPort: 8080
+  - name: ajp-port
+    protocol: TCP
+    port: 11081
+    targetPort: 8009
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 1800
+---
+apiVersion: v1
+kind: Service
+metadata:
+   name: collaboration
+   labels:
+     product: "softwareag-{{ .Values.product}}"
+spec:
+  selector:
+    app: {{ .Release.Name}}-collaboration
+  ports:
+  - name: connect-port
+    protocol: TCP
+    port: 10083
+    targetPort: 8080
+  - name: ajp-port
+    protocol: TCP
+    port: 11083
+    targetPort: 8009
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 1800
+---
+apiVersion: v1
+kind: Service
+metadata:
+   name: cloudsearch
+   labels:
+     product: "softwareag-{{ .Values.product}}"
+spec:
+  selector:
+    app: {{ .Release.Name}}-cloudsearch
+  ports:
+  - name: connect-port
+    protocol: TCP
+    port: 8099
+    targetPort: 8099
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 1800
+---
+apiVersion: v1
+kind: Service
+metadata:
+   name: adsadmin
+   labels:
+     product: "softwareag-{{ .Values.product}}"
+spec:
+  selector:
+    app: {{ .Release.Name}}-adsadmin
+  ports:
+  - name: connect-port
+    protocol: TCP
+    port: 10084
+    targetPort: 8080
+  - name: ajp-port
+    protocol: TCP
+    port: 11084
+    targetPort: 8009
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 1800
+---
+apiVersion: v1
+kind: Service
+metadata:
+   name: portalserver
+   labels:
+     product: "softwareag-{{ .Values.product}}"
+spec:
+  selector:
+    app: {{ .Release.Name}}-portalserver
+  ports:
+  - name: connect-port
+    protocol: TCP
+    port: 10082
+    targetPort: 8080
+  - name: ajp-port
+    protocol: TCP
+    port: 11082
+    targetPort: 8009
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 1800
+---
+apiVersion: v1
+kind: Service
+metadata:
+   name: tm
+   labels:
+     product: "softwareag-{{ .Values.product}}"
+spec:
+  selector:
+    app: {{ .Release.Name}}-tm
+  ports:
+  - name: connect-port
+    protocol: TCP
+    port: 10087
+    targetPort: 8080
+  - name: ajp-port
+    protocol: TCP
+    port: 11087
+    targetPort: 8009
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 1800

@@ -1,0 +1,20 @@
+************************************************************************
+*** PLEASE BE PATIENT: API Gateway may take a few minutes to install ***
+************************************************************************
+
+SAG API Gateway
+---------------
+
+You have deployed release: {{ .Release.Name }}.
+
+{{- if eq true .Values.apigateway.route.enabled }}
+1. Get your API Gateway UI endpoint:
+export APIGATEWAY_HOST=$(oc get route {{ $.Release.Name }}-gateway -o jsonpath='{.spec.host}')
+You should be able to access the API Gateway management GUI in a browser through address: {{ if .Values.apigateway.route.tls.enabled }}https{{ else }}http{{ end }}://$APIGATEWAY_HOST
+{{- end }}
+
+{{- if eq true .Values.is.route.enabled }}   
+2. Get your API invocation endpoint:
+export IS_HOST=$(oc get route {{ $.Release.Name }}-is -o jsonpath='{.spec.host}')
+The base url of your APIs is: {{ if .Values.is.route.tls.enabled }}https{{ else }}http{{ end }}://$IS_HOST
+{{- end }}

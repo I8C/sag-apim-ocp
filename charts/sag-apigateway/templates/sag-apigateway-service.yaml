@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-gateway
+  labels:
+{{ include "apigateway.labels" . | indent 4 }}
+spec:
+  type: {{ .Values.apigateway.service.type }}
+  {{- if and (eq .Values.apigateway.service.type "LoadBalancer") (ne $.Values.apigateway.service.staticIP "UNSET") }}
+  loadBalancerIP: {{ $.Values.apigateway.service.staticIP }}
+{{- end }}
+  ports:
+    - name: {{.Values.apigateway.service.targetPort }}-tcp
+      port: {{.Values.apigateway.service.port }}
+      targetPort: {{.Values.apigateway.service.targetPort }}
+      protocol: TCP
+    {{- if and (ne .Values.apigateway.service.nodePort "UNSET") (eq .Values.apigateway.service.type "NodePort") }}
+      nodePort: {{.Values.apigateway.service.nodePort }}  
+    {{- end }}  
+  selector:
+    app.kubernetes.io/name: {{ include "apigateway.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-is
+  labels:
+{{ include "apigateway.labels" . | indent 4 }}
+spec:
+  type: {{ .Values.is.service.type }}
+  {{- if and (eq .Values.is.service.type "LoadBalancer") (ne $.Values.is.service.staticIP "UNSET") }}
+  loadBalancerIP: {{ $.Values.is.service.staticIP }}
+{{- end }}
+  ports:
+    - name: {{.Values.is.service.targetPort }}-tcp
+      port: {{.Values.is.service.port }}
+      targetPort: {{.Values.is.service.targetPort }}
+      protocol: TCP
+    {{- if and (ne .Values.is.service.nodePort "UNSET") (eq .Values.is.service.type "NodePort") }}
+      nodePort: {{.Values.is.service.nodePort }}  
+    {{- end }}  
+  selector:
+    app.kubernetes.io/name: {{ include "apigateway.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+
+{{- if not .Values.elasticsearch_external }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-elasticsearch-gateway
+  labels:
+{{ include "apigateway.labels" . | indent 4 }}
+spec:
+  type: {{ .Values.elasticsearch.service.type }}
+  {{- if and (eq .Values.elasticsearch.service.type "LoadBalancer") (ne $.Values.elasticsearch.service.staticIP "UNSET") }}
+  loadBalancerIP: {{ $.Values.elasticsearch.service.staticIP }}
+{{- end }}
+  ports:
+    - name: {{.Values.elasticsearch.service.targetPort }}-tcp
+      port: {{.Values.elasticsearch.service.port }}
+      targetPort: {{.Values.elasticsearch.service.targetPort }}
+    {{- if and (ne .Values.elasticsearch.service.nodePort "UNSET") (eq .Values.elasticsearch.service.type "NodePort") }}
+      nodePort: {{.Values.elasticsearch.service.nodePort }}  
+    {{- end }}
+  selector:
+    app.kubernetes.io/name: {{ include "apigateway.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

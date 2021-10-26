@@ -1,0 +1,9 @@
+{{- if eq .Values.apigateway.license.useYourOwnLicense true }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-apigw-license
+data:
+  license.xml: |-
+{{ printf "files/%s" .Values.apigateway.license.fileName | .Files.Get | indent 4 }}
+{{- end }}

@@ -1,0 +1,28 @@
+{{- if eq true .Values.loadbalancer.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ $.Release.Name }}-portal
+spec:
+{{- if ne .Values.loadbalancer.externalFQDN "UNSET" }}
+  host: {{ .Values.loadbalancer.externalFQDN }}
+{{- end }}
+  port:
+    targetPort: {{ .Values.loadbalancer.service.targetPort }}
+  subdomain: ""
+  to:
+    kind: Service
+    name: {{ $.Release.Name }}-loadbalancer
+    weight: 100
+  wildcardPolicy: None
+  {{- if .Values.loadbalancer.route.tls.enabled }}
+  tls:
+    termination: edge
+    key: |
+{{ .Values.loadbalancer.route.tls.key | b64dec | indent 6 }}
+    certificate: |
+{{ .Values.loadbalancer.route.tls.cert | b64dec | indent 6 }}
+    caCertificate: |
+{{ .Values.loadbalancer.route.tls.cacert | b64dec | indent 6 }}
+  {{- end }}
+{{- end }}

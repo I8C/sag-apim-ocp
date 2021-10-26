@@ -1,0 +1,54 @@
+{{- if and ($.Release.IsInstall) (eq .Values.isUpdate false) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{$.Release.Name}}-create-tech-user
+  labels:
+    job: {{ $.Release.Name }}-create-tech-user
+    helm-release: {{ $.Release.Name }}
+spec:
+  # configurable number of retries with exponential back-off delay (10s, 20s, 40s, ...) with 6mins max
+  backoffLimit: {{ $.Values.jobs.backoffLimit }}
+  template:
+    spec:
+{{- if $.Values.tolerations }}
+      tolerations:
+{{ toYaml $.Values.tolerations | indent 8 }}
+{{- end }}
+      initContainers:
+      - name: waitforzookeeper
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-admin-tools:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{$.Values.image.pullPolicy | default "always" | quote}}
+        securityContext:
+          runAsUser: 0
+        command:
+          - bash
+          - -ec
+          - |
+{{ tpl ($.Files.Get "files/zkStatusCheck.sh") $ | indent 14 }}
+      containers:
+      - name: "admintools"
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-admin-tools:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{.Values.image.pullPolicy | default "Always" | quote}}
+        command: ["/bin/bash" ]
+        args: [ "-c", "printf 'set tenant default data for application umc ecpTechnicalUserPassword=\"'${APP_PASSWD}'\" ecpTechnicalUserName=\"_aris_tech_user_ecp_techuser\"' > /accCommand.tp; \
+                       printf '#!/bin/bash\nset -x\necho \"Creating tech user with password \"'${APP_PASSWD}' && \
+                              ./acc.sh -srv http://{{$.Release.Name}}-loadbalancer:{{ $.Values.loadbalancer.service.port | default 80 }} -u system -pwd \"'${APP_PASSWD}'\" -f /accCommand.tp && \
+                              ./y-tenantmgmt.sh -s http://{{$.Release.Name}}-loadbalancer:{{$.Values.loadbalancer.service.port}} -t default createUser -u system -p \"'${APP_PASSWD}'\" -au \"_aris_tech_user_ecp_techuser\" -ap \"'${APP_PASSWD}'\" -_asTechnicalUser' \
+                              > createAndRegisterTechUser.sh; \
+                              chmod +x createAndRegisterTechUser.sh; \
+                              /aris/container/retry.sh {{$.Values.jobs.internalRetry.maxRetries }} {{$.Values.jobs.internalRetry.waitTimeSec }} timeout 60 ./createAndRegisterTechUser.sh; "]
+        securityContext:
+          runAsUser: 0
+        env:
+        - name: APP_PASSWD
+          valueFrom:
+            secretKeyRef:
+              name: {{ $.Release.Name }}-app-secrets
+              key: app_passwd
+      restartPolicy: OnFailure
+{{- if eq $.Values.image.servicePrincipal false }}
+      imagePullSecrets:
+      - name: {{ $.Values.image.registrySecret }}
+{{- end }}
+{{- end }}

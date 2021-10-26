@@ -1,0 +1,15 @@
+************************************************************************
+*** PLEASE BE PATIENT: API Portal may take a few minutes to install ***
+************************************************************************
+
+SAG API Portal
+---------------
+
+You have deployed release: {{ .Release.Name }}.
+
+{{- if eq true .Values.loadbalancer.route.enabled }}
+1. Get your API Portal UI endpoint:
+export PORTAL_HOST=$(oc get route {{ $.Release.Name }}-portal -o jsonpath='{.spec.host}')
+You should be able to access the API Gateway management GUI in a browser through address: {{ if .Values.loadbalancer.route.tls.enabled }}https{{ else }}http{{ end }}://$PORTAL_HOST
+{{- end }}
+

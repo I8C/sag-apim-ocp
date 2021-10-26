@@ -1,0 +1,13 @@
+cluster.name: SAG_EventDataStore
+node.name: localhost
+path.logs: {{ .Values.elasticsearch.logs.path }}
+network.host: 0.0.0.0
+
+http.port: 9240
+#discovery.type: single-node
+discovery.seed_hosts: ["localhost:9340"]
+transport.tcp.port: 9340
+path.repo: ['{{ .Values.elasticsearch.data.path }}']
+
+cluster.initial_master_nodes: ["localhost"]
+path.data: {{ .Values.elasticsearch.data.path }}

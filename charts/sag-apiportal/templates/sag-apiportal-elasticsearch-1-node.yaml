@@ -1,0 +1,227 @@
+#Deployment and service for ONE Elasticsearch
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{.Release.Name}}-elasticsearch
+  labels:
+    app: elasticsearch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      product: "softwareag-{{.Values.product}}"
+      app: {{.Release.Name}}-elasticsearch
+      elasticsearch-az: {{.Release.Name}}-az1
+  serviceName: "{{.Release.Name}}-elasticsearch"
+  template:
+    metadata:
+      labels:
+        product: "softwareag-{{.Values.product}}"
+        app: {{.Release.Name}}-elasticsearch
+        elasticsearch-az: {{.Release.Name}}-az1
+    spec:
+{{- if $.Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml $.Values.nodeSelector | indent 8 }}
+{{- end }}
+{{- if $.Values.tolerations }}
+      tolerations:
+{{ toYaml $.Values.tolerations | indent 8 }}
+{{- end }}
+      initContainers:
+      #use a privileged init container to set the host-level setting vm.max_map_count to a value large enough for Elasticsearch 
+      #(see https://www.elastic.co/guide/en/elasticsearch/reference/current/vm-max-map-count.html)
+      - name: setmaxmapcount
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-infrastructure-tools:{{ .Values.elasticsearch.version }}
+        imagePullPolicy: {{.Values.image.pullPolicy | default "always" | quote}}
+        securityContext:
+          privileged: true
+          runAsUser: 0
+        command: ["sysctl", "-w", "vm.max_map_count=262144"]  
+      containers:
+      - name: elasticsearch
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-elastic:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{.Values.image.pullPolicy | default "always" | quote}}
+{{- if eq .Values.elasticsearch.backup.enabled true }}
+        securityContext:
+          runAsUser: 0
+        lifecycle:
+          postStart:
+            exec:
+              command: ["/bin/sh","-c","chown -R elasticsearch:elasticsearch {{ .Values.elasticsearch.backup.mountPath }}"]
+{{- end }}
+        env:
+        - name: zookeeper_connect_string
+          value: {{.Release.Name}}-zookeeper:{{.Values.zookeeper.service.port | default 14281}}
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: ELASTICSEARCH__aris__api__user__password
+          valueFrom:
+            secretKeyRef:
+               name: {{ .Release.Name }}-es-secret
+               key: password
+        - name:  REDIRECT_LOGFILES
+          value: {{ $.Values.logs.redirectLogfiles | quote }}
+{{- if eq .Values.elasticsearch.backup.enabled true }}
+        - name: ELASTICSEARCH__path__repo
+          value: {{.Values.elasticsearch.backup.mountPath | quote }}
+{{- end }}
+        - name: instance_id
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+{{- if .Values.monitoring }}
+        - name: ENABLE_PROMETHEUS_AGENT
+          value: "true"
+{{- end }}
+{{- if (ne "UNSET" (index $.Values "elasticsearch" "sizing" "java" "Xmx")) }}
+        - name: Xmx
+          value: {{ (index $.Values "elasticsearch" "sizing" "java" "Xmx") | quote}}
+{{- end }}
+        ports:
+        - containerPort: 14220
+          name: client-port
+        - containerPort: 14230
+          name: server-port
+        livenessProbe:
+           exec:
+             command:
+             - sh
+             - -c
+             - curl -XGET http://localhost:14220/
+           failureThreshold: 3
+           initialDelaySeconds: 30
+           periodSeconds: 10
+           successThreshold: 1
+           timeoutSeconds: 5
+        readinessProbe:
+           exec:
+             command:
+             - sh
+             - -c
+             - curl -XGET http://localhost:14220/
+           failureThreshold: 3
+           initialDelaySeconds: 10
+           periodSeconds: 10
+           successThreshold: 1
+           timeoutSeconds: 5
+        resources:
+          requests:
+            memory: {{ (index $.Values "elasticsearch" "sizing" "resources" "requests" "memory" ) | quote }}
+            cpu: {{ (index $.Values "elasticsearch"  "sizing" "resources" "requests" "cpu" ) | quote }}
+        volumeMounts:
+            - mountPath: /elasticsearch/data
+              name: data-volume          
+              subPath: es1_data
+            - mountPath: /aris/zkc
+              name: data-volume          
+              subPath: es1_zkc
+{{-  if eq .Values.logs.enabled true }}
+            - mountPath: /logs
+              name: logs-volume          
+{{- end }}
+            #- mountPath: /aris/plugin/log4j2.xml
+            #  name: log4j
+            #  subPath: log4j2.xml
+{{- if eq .Values.elasticsearch.backup.enabled true }}
+            - mountPath: {{ .Values.elasticsearch.backup.mountPath }}
+              name: es-snapshots
+{{- end }}
+{{- if  and (eq $.Values.logs.deployRedirectLogContainer true) (eq $.Values.logs.enabled true) }}
+      - name: "elasticlogs"
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}redirect-logs:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{ $.Values.image.pullPolicy | default "always" | quote }}
+        command:
+          - bash
+          - -ec
+          - |
+              exec /consolelog.sh
+        env:
+        - name: app_type
+          value: elasticsearch
+        - name: instance_id
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+          - mountPath: /logs
+            name: logs-volume
+        resources:
+           requests:
+             memory: "50Mi"
+             cpu: "50m"
+           limits:
+             memory: {{ $.Values.logs.memoryLimit | quote }}
+             cpu: {{ $.Values.logs.cpuLimit | quote }}
+{{- end }}
+{{- if eq $.Values.image.servicePrincipal false }} 
+      imagePullSecrets:
+      - name: {{.Values.image.registrySecret}}
+{{- end }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: app  
+                    operator: In
+                    values:
+                    - {{.Release.Name}}-elasticsearch
+                topologyKey: {{.Values.NODE_TOPOLOGY_KEY | default "kubernetes.io/hostname" | quote}}
+      volumes:
+      #- name: log4j
+      #  configMap:
+      #    name: es-plugin-log4j
+{{-  if eq .Values.logs.enabled true }}      
+      - name: logs-volume
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}-{{ .Values.logs.pvcName}}
+{{- end }}
+{{- if eq .Values.elasticsearch.backup.enabled true }}
+      - name: es-snapshots
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}-{{ .Values.elasticsearch.backup.pvcName}}
+{{- end }}
+{{- if and (eq false .Values.elasticsearch.storage.useVolumeClaimTemplate) (eq false .Values.elasticsearch.storage.useEmptyVolume) }}
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: ${.Values.elasticsearch.storage.pvcName}
+{{- else if .Values.elasticsearch.storage.useEmptyVolume }}
+      - name: data-volume
+        emptyDir: {}
+{{- else }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data-volume
+        labels:
+          product: "softwareag-{{.Values.product}}"
+          app: "{{.Release.Name}}-elasticsearch"
+          helm-release: "{{.Release.Name}}"
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: {{ $.Release.Name }}-{{ $.Values.elasticsearch.storage.storageClassName }}
+        resources:
+          requests:
+            storage: {{.Values.elasticsearch.storage.size | default "5Gi" | quote}}  
+{{- end }}
+            
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: {{.Release.Name}}-elasticsearch
+spec:
+  type: {{.Values.elasticsearch.service.type | default "ClusterIP" }}
+  clusterIP: None
+  selector:
+    app: {{.Release.Name}}-elasticsearch
+  ports:
+  - name: elasticsearch-client-port
+    protocol: TCP
+    port: 14220
+{{- if and (ne .Values.elasticsearch.service.nodePort "UNSET") (eq .Values.elasticsearch.service.type "NodePort") }}
+    nodePort: {{.Values.elasticsearch.service.nodePort | default 30220 }}  
+{{- end }}
+

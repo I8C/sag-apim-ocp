@@ -1,0 +1,26 @@
+{{- if eq .Values.ingress.enabled true  }}
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: {{.Release.Name}}-ingress
+  labels:
+    helm-release: "{{ $.Release.Name }}"
+
+spec:
+  {{- if (ne "UNSET" .Values.ingress.https.secretName )  }}
+  tls:
+  - hosts:
+    - {{ .Values.loadbalancer.externalFQDN }}
+    secretName: {{ .Values.ingress.https.secretName }}
+  {{- end }}
+  #When using nginx ingress, we need to route based on host, as this ingress controller will have exactly one LB directing traffic to it, and will then route
+  #to the actual service based on the host
+  rules:
+    - host: {{ .Values.loadbalancer.externalFQDN }}
+      http:
+        paths:
+          - path: /
+            backend:
+              serviceName: {{.Release.Name}}-loadbalancer
+              servicePort: {{ .Values.loadbalancer.service.port }}
+{{- end }}

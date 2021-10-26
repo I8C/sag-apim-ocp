@@ -1,0 +1,21 @@
+#  Copyright (C) 2018 Software AG, Darmstadt, Germany and/or Software AG USA Inc., Reston, VA, USA,
+#  and/or its subsidiaries and/or its affiliates and/or their licensors.
+#
+#  Use, reproduction, transfer, publication or disclosure is prohibited
+#  except as specifically provided for in your License Agreement with Software AG.
+
+{{- if (ne "DB" .Values.applications.adsadmin.storage.mode) }}
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: {{ .Release.Name }}-{{ .Values.applications.adsadmin.storage.pvcName }}
+  labels: 
+    product: "softwareag-{{ .Values.product }}"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: {{ .Values.applications.adsadmin.storage.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.applications.adsadmin.storage.storageSize }}
+{{- end }} #end of outer if statement

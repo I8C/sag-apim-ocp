@@ -1,0 +1,199 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-cloudsearch
+  labels:
+    app: {{ .Release.Name }}-cloudsearch
+spec:
+  replicas: {{ .Values.cloudsearch.replicas | default 1 }}
+  selector:
+    matchLabels:
+      product: "softwareag-{{.Values.product}}"
+      app: {{ .Release.Name }}-cloudsearch
+  serviceName: "{{.Release.Name}}-cloudsearch"
+  template:
+    metadata:
+      labels:
+        product: "softwareag-{{.Values.product}}"
+        app: {{ .Release.Name }}-cloudsearch
+{{- if $.Values.monitoring }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9601"
+{{- end }}
+    spec:
+{{- if $.Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml $.Values.nodeSelector | indent 8 }}
+{{- end }}
+{{- if $.Values.tolerations }}
+      tolerations:
+{{ toYaml $.Values.tolerations | indent 8 }}
+{{- end }}
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: cloudsearch
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-cloudsearch:{{ .Values.cloudsearch.version }}
+        ports:
+        - containerPort: 8099
+        imagePullPolicy: {{ $.Values.image.pullPolicy | default "always" | quote }}
+        command:
+          - bash
+          - -ec
+          - |
+              export HOSTNAME=${HOSTNAME}.{{.Release.Name}}-cloudsearch
+              exec /startcs.sh
+{{- if $.Values.cloudsearch.securityContext }}
+        securityContext:
+{{ toYaml $.Values.cloudsearch.securityContext | indent 10 }}
+{{- end }}
+        env:
+        - name: zookeeper_connect_string
+          value: {{ $.Release.Name }}-zookeeper:{{ $.Values.zookeeper.service.port | default 14281}}
+        - name: zookeeper_application_instance_datacenter
+          valueFrom: 
+            fieldRef:
+              fieldPath: metadata.name
+        - name: instance_id
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name:  REDIRECT_LOGFILES
+          value: {{ $.Values.logs.redirectLogfiles | quote }}
+{{- if .Values.monitoring }}
+        - name: ENABLE_PROMETHEUS_AGENT
+          value: "true"
+{{- end }}
+        - name: USE_DYNMOUNT
+          value: "true"
+{{- if (ne "UNSET" (index $.Values "cloudsearch" "sizing" "java" "Xmx")) }}
+        - name: Xmx
+          value: {{ (index $.Values "cloudsearch" "sizing" "java" "Xmx") | quote }}
+{{- end }}
+{{- if .Values.monitoring }}
+        ports:
+        - containerPort: 9601
+          name: prometheus-port
+{{- end }}
+        livenessProbe:
+           exec:
+             command:
+             - /aris/container/checkReadiness.sh
+           failureThreshold: 3
+           initialDelaySeconds: 900
+           periodSeconds: 30
+           successThreshold: 1
+           timeoutSeconds: 5
+        readinessProbe:
+           exec:
+             command:
+             - /aris/container/checkReadiness.sh
+           failureThreshold: 3
+           initialDelaySeconds: 10
+           periodSeconds: 30
+           successThreshold: 1
+           timeoutSeconds: 5
+        resources:
+          requests:
+            memory: {{ (index $.Values "cloudsearch" "sizing" "resources" "requests" "memory" ) | quote }}
+            cpu: {{ (index $.Values "cloudsearch"  "sizing" "resources" "requests" "cpu" ) | quote }}
+        volumeMounts:
+{{-  if eq .Values.logs.enabled true }}        
+          - mountPath: /logs
+            name: logs-volume
+{{- end }}            
+          - mountPath: /data
+            name: data-volume        
+{{- if  and (eq $.Values.logs.deployRedirectLogContainer true) (eq $.Values.logs.enabled true) }}
+      - name: "cloudsearchlogs"
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}redirect-logs:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{ $.Values.image.pullPolicy | default "always" | quote }}
+        command:
+          - bash
+          - -ec
+          - |
+              exec /consolelog.sh
+        env:
+        - name: app_type
+          value: rs
+        - name: instance_id
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+          - mountPath: /logs
+            name: logs-volume
+        resources:
+           requests:
+             memory: "50Mi"
+             cpu: "50m"
+           limits:
+             memory: {{ $.Values.logs.memoryLimit | quote }}
+             cpu: {{ $.Values.logs.cpuLimit | quote }}
+{{- end }} 
+{{- if eq $.Values.image.servicePrincipal false }} 
+      imagePullSecrets:
+      - name: {{ $.Values.image.registrySecret }}
+{{- end }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                    - {{.Release.Name}}-cloudsearch
+                topologyKey: {{.Values.NODE_TOPOLOGY_KEY | default "kubernetes.io/hostname" | quote}}
+      volumes:
+{{-  if eq .Values.logs.enabled true }}              
+      - name: logs-volume
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}-{{ .Values.logs.pvcName}}
+{{- end }}
+{{- if and (eq false .Values.cloudsearch.storage.useVolumeClaimTemplate) (eq false .Values.cloudsearch.storage.useEmptyVolume) }}
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: {{$.Values.cloudsearch.storage.pvcName}}
+{{- else if .Values.cloudsearch.storage.useEmptyVolume }}
+      - name: data-volume
+        emptyDir: {}
+{{- else }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data-volume
+        labels:
+          product: "softwareag-{{.Values.product}}"
+          app: "{{.Release.Name}}-cloudsearch"
+          helm-release: "{{.Release.Name}}"
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: {{ $.Release.Name }}-{{ $.Values.cloudsearch.storage.storageClassName }}
+        resources:
+          requests:
+            storage: {{ $.Values.cloudsearch.storage.size | default "10Gi" | quote }}   
+{{- end }}
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: {{.Release.Name}}-cloudsearch
+  labels:
+    product: "softwareag-{{.Values.product}}"
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app: {{.Release.Name}}-cloudsearch
+  ports:
+  - name: cloudsearch-client-port
+    protocol: TCP
+    port: 8099
+    targetPort: 8099
+{{- if .Values.monitoring }}
+  - name: prometheus-port
+    protocol: TCP
+    port: 9601
+    targetPort: 9601
+{{- end }}

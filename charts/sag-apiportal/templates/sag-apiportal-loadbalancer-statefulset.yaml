@@ -1,0 +1,188 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $.Release.Name }}-loadbalancer
+  labels:
+    app: {{ $.Release.Name }}-loadbalancer
+    helm-release: "{{ $.Release.Name }}"
+
+spec:
+  replicas: {{ $.Values.loadbalancer.replicas }}
+  selector:
+    matchLabels:
+      product: "softwareag-{{ $.Values.product}}"
+      app: {{ $.Release.Name }}-loadbalancer
+  serviceName: {{ $.Release.Name }}-loadbalancer
+  template:
+    metadata:
+      labels:
+        product: "softwareag-{{ $.Values.product}}"
+        app: {{ $.Release.Name }}-loadbalancer
+        helm-release: "{{ $.Release.Name }}"
+    spec:
+{{- if $.Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml $.Values.nodeSelector | indent 8 }}
+{{- end }}
+{{- if $.Values.tolerations }}
+      tolerations:
+{{ toYaml $.Values.tolerations | indent 8 }}
+{{- end }}
+{{- if eq .Values.loadbalancer.externalFQDN "UNSET" }}
+    # gets the ELB endpoint FQDN via the Kubernetes REST API if not "nice" FQDN which will be (manually) mapped to the ELB is provided
+      #serviceAccountName: {{ $.Release.Name }}-serviceaccount
+{{- if $.Values.loadbalancer.securityContext }}
+      securityContext:
+{{ toYaml $.Values.loadbalancer.securityContext | indent 8 }}
+{{- end }}
+      initContainers:
+      - name: obtain-external-lb-fqdn
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-infrastructure-tools:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsUser: 0
+        command: ["/bin/bash" ]
+{{- if eq .Values.ingress.enabled true }}                                                                                                                                                                                                  
+        args: [ "-c", "set -x; while [[ true ]]; do url=$(curl -s -k -f -H \"Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\" https://kubernetes.default.svc.cluster.local/apis/extensions/v1beta1/namespaces/{{ $.Release.Namespace }}/ingresses/{{ $.Release.Name }}-ingress | jq -e -r .status.loadBalancer.ingress[0].ip); if [ \"$url\" != \"\" ] && [ \"$url\" != \"null\" ]; then printf \"#!/bin/bash \nexport HTTPD_servername=%s\" $url; break; else sleep 5; fi; done  > /output/beforestart.sh "]
+{{- else if eq .Values.loadbalancer.route.enabled true }}
+        args: [ "-c", "set -x; while [[ true ]]; do url=$(curl -s -k -f -H \"Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\" https://kubernetes.default.svc.cluster.local/apis/route.openshift.io/v1/namespaces/{{ $.Release.Namespace }}/routes/{{ $.Release.Name }}-portal | jq -e -r .status.ingress[0].host); if [ \"$url\" != \"\" ] && [ \"$url\" != \"null\" ]; then printf \"#!/bin/bash \nexport HTTPD_servername=%s\" $url; break; else sleep 5; fi; done  > /output/beforestart.sh "]
+{{- end }} # end of ingress 
+        volumeMounts:
+        - mountPath: /output
+          name: temp-volume
+{{- end }} # end of loadbalancer if
+      terminationGracePeriodSeconds: 0
+      containers:
+      - name: loadbalancer
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-loadbalancer:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{ $.Values.image.pullPolicy | default "Always" | quote }}
+        securityContext:
+          runAsUser: 0
+        env:
+        - name: zookeeper_connect_string
+          value: {{ $.Release.Name }}-zookeeper:{{ $.Values.zookeeper.service.port | default 14281 }}
+        - name: sag_product
+          value: {{ $.Values.product | quote}}
+        - name: REDIRECT_LOGFILES
+          value: {{ $.Values.logs.redirectLogfiles | default true | quote }}
+        - name: HTTPD_access_root
+          value: "granted"
+        - name: HTTPD_keepalive
+          value: "on"
+        - name: HTTPD_modjk_stickySessions_cop
+          value: "true"
+        - name: HTTPD_modjk_stickySessions_tm
+          value: "true"
+        - name: HTTPD_LimitRequestFieldSize
+          value: "32768"
+{{- if ne .Values.loadbalancer.externalFQDN "UNSET"}}              
+        - name: HTTPD_servername
+          value: {{ .Values.loadbalancer.externalFQDN | quote }}
+{{- end }}
+{{- if ne .Values.loadbalancer.externalFQDN "UNSET"}}
+        - name: HTTPD_RewriteEngine
+          value: "off"
+{{- end }}
+{{- if eq .Values.loadbalancer.externalScheme "http" }}
+{{- if ne .Values.loadbalancer.externalPort "UNSET" }}
+        - name:  HTTPD_external_http_port
+          value: {{ .Values.loadbalancer.externalPort | quote }}
+{{- else }}
+        - name:  HTTPD_external_http_port
+          value: "80"
+{{- end }}
+{{- else }}
+{{- if ne .Values.loadbalancer.externalPort "UNSET" }}
+        - name:  HTTPD_external_https_port
+          value: {{ .Values.loadbalancer.externalPort | quote }}
+{{- else }}
+        - name:  HTTPD_external_https_port
+          value: "443"
+{{- end }}
+        - name:  HTTPD_zookeeper_prefer_https
+          value: "true"
+{{- end }}
+{{- if ne .Values.loadbalancer.trustedProxyRegex "UNSET" }}
+        - name:  HTTPD_X_Forwarded_For_trusted_proxy_regex
+          value: {{ .Values.loadbalancer.trustedProxyRegex | quote }}
+{{- end }}
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: instance_id
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+{{-  if eq $.Values.logs.enabled true }}  
+          - mountPath: /logs
+            name: logs-volume
+{{- end }}            
+{{- if eq .Values.loadbalancer.externalFQDN "UNSET"}}   
+          - mountPath: /usr/local/bin/custom
+            name: temp-volume
+{{- end }}
+        livenessProbe:
+          exec:
+            command:
+            - /aris/container/checkReadiness.sh
+          failureThreshold: 3
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        readinessProbe:
+          exec:
+            command:
+            - /aris/container/checkReadiness.sh
+          failureThreshold: 3
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 5
+        resources:
+          requests:
+            memory: {{ (index $.Values "loadbalancer" "sizing" "resources" "requests" "memory" ) | quote }}
+            cpu: {{ (index    $.Values  "loadbalancer" "sizing" "resources" "requests" "cpu" ) | quote }}
+{{- if  and (eq $.Values.logs.deployRedirectLogContainer true) (eq $.Values.logs.enabled true) }}
+      - name: "lblogs"
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}redirect-logs:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{ $.Values.image.pullPolicy | default "always" | quote }}
+        securityContext:
+          runAsUser: 0
+        command:
+          - bash
+          - -ec
+          - |
+              exec /consolelog.sh
+        env:
+        - name: app_type
+          value: loadbalancer
+        - name: instance_id
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+          - mountPath: /logs
+            name: logs-volume
+        resources:
+           requests:
+             memory: "50Mi"
+             cpu: "50m"
+           limits:
+             memory: {{ $.Values.logs.memoryLimit | quote }}
+             cpu: {{ $.Values.logs.cpuLimit | quote }}
+{{- end }}
+{{- if eq $.Values.image.servicePrincipal false }}
+      imagePullSecrets:
+      - name: {{ $.Values.image.registrySecret }}
+{{- end }}
+      volumes:
+      - name: temp-volume
+        emptyDir:  {}
+{{- if eq $.Values.logs.enabled true }}  
+      - name: logs-volume
+        persistentVolumeClaim:
+          claimName: {{ $.Release.Name }}-{{ $.Values.logs.pvcName}}
+{{- end }}

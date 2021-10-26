@@ -1,0 +1,29 @@
+{{- if eq .Values.loadbalancer.externalFQDN "UNSET"}}
+# The existing service account needs to contain extra privileges that is used by the loadbalancer init container to obtain the Routes or Ingress endpoint URL from the K8s API
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ .Release.Name }}-service-reader
+rules:
+- apiGroups: [""] # "" indicates the core API group
+  resources: ["services"]
+  verbs: ["get", "list"]
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["get", "list"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Release.Name }}-default-service-reader-binding
+  namespace:  {{ .Release.Namespace }}
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace:  {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-service-reader
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

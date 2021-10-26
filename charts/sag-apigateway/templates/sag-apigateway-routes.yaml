@@ -1,0 +1,59 @@
+# Gateway
+{{- if eq true .Values.apigateway.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ $.Release.Name }}-gateway
+spec:
+{{- if ne .Values.apigateway.externalFQDN "UNSET" }}
+  host: {{ .Values.apigateway.externalFQDN }}
+{{- end }}
+  port:
+    targetPort: {{.Values.apigateway.service.targetPort }}
+  subdomain: ""
+  to:
+    kind: Service
+    name: {{ $.Release.Name }}-gateway
+    weight: 100
+  wildcardPolicy: None
+{{- if .Values.apigateway.route.tls.enabled }}
+  tls:
+    termination: edge
+    key: |
+{{ .Values.apigateway.route.tls.key | b64dec | indent 6 }}
+    certificate: |
+{{ .Values.apigateway.route.tls.cert | b64dec | indent 6 }}
+    caCertificate: |
+{{ .Values.apigateway.route.tls.cacert | b64dec | indent 6 }}
+  {{- end }}
+---
+{{- end }}
+# IS
+{{- if eq true .Values.is.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ $.Release.Name }}-is
+spec:
+{{- if ne .Values.is.externalFQDN "UNSET" }}
+  host: {{ .Values.is.externalFQDN }}
+{{- end }}
+  port:
+    targetPort: {{.Values.is.service.targetPort }}
+  subdomain: ""
+  to:
+    kind: Service
+    name: {{ $.Release.Name }}-is
+    weight: 100
+  wildcardPolicy: None
+{{- if .Values.is.route.tls.enabled }}
+  tls:
+    termination: edge
+    key: |
+{{ .Values.is.route.tls.key | b64dec | indent 6 }}
+    certificate: |
+{{ .Values.is.route.tls.cert | b64dec | indent 6 }}
+    caCertificate: |
+{{ .Values.is.route.tls.cacert | b64dec | indent 6 }}
+  {{- end }}
+{{- end }}

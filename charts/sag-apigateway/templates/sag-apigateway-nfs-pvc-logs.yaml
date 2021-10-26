@@ -1,0 +1,13 @@
+{{- if eq .Values.apigateway.logs.enabled true }}
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: {{ .Release.Name }}-{{ .Values.apigateway.logs.pvcName}}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: {{ .Values.apigateway.logs.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.apigateway.logs.storageSize }}
+{{- end }}

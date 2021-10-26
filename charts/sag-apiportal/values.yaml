@@ -1,0 +1,619 @@
+
+
+#to monitor each microservices using prometheus
+monitoring: false
+
+customLabels:
+  # labels added to all the following kinds of Kubernetes objects created by this Helm chart: pods, all controllers (mostly statefulsets at the time of this writing),
+  # services, ingresses, storage classes, roles, rolebindings, jobs
+  global: {}
+
+jobs:
+  backoffLimit: 9999
+  #since Kubernetes gives basically no control over job retry policy (except for the backoffLimit), we made all jobs of this helm chart
+  #use a retry script with configurable number of retries and retry interval.
+  internalRetry:
+    maxRetries: 99
+    waitTimeSec: 10
+
+ingress:
+  #set to true to enable the creation of an Ingress object as a layer 7 entrypoint to the application
+  # WARNING: if your cluster does not support an Ingress out of the box, some application functionality will not work.
+  # note that when using an Ingress, there is little sense in creating the loadbalancer service of type "LoadBalancer"; "NodePort" is sufficient in that case
+  # You can also manually provide a layer-7-loadbalancer and let it direct traffic to your cluster's worker nodes, to the NodePort created for the installation's NodePort service
+  enabled: false
+  type: nginx
+  nginx:
+    maxBodySize: "250m"
+    proxyConnectTimeout: "100"
+    proxyReadTimeout: "1800"
+    proxySendTimeout: "1800"
+  http:
+    enabled: false
+    port: 80
+  https:
+    enabled: true
+    port: 443
+    # the name of a (pre-generated!) secret holding the TLS secret to use when using an NGINX-based ingress
+    # leave set to "UNSET" to not have TLS
+    secretName: "apiportaltls"
+
+# Install the SAG webMethods API Portal version you want by setting the correct image versions.
+image:
+  # use of dockerhub/store registry to pull API Portal images from.
+  registry: store
+  # Image version releates to the SAG APIM version
+  # version: 10.0.14.70 --> SAG APIM 10.7
+  # version: 10.0.10.1 --> SAG APIM  10.5
+  version: 10.0.14.70
+  # Whether to use the Service Account to pull the images from the registery or the 'registrySecret'
+  servicePrincipal: false
+  # "Always" is recommended during testing with SNAPSHOT versions, otherwise use "IfNotPresent"
+  pullPolicy: Always
+  # Name of the Docker Registry Secret to pull the image from the dockerhub/store. This is only used when servicePrincipal is set to false
+  # This secret must exist in advance, before installing the chart
+  registrySecret: regsecret
+
+# Details of nfs server containing jdbc jar file,if external database is other than postgres. Create a directory 'jdbc' in the nfs and copy the appropriate jdbc jar to that folder.
+enhancements:
+  # Set to true if external database is other than postgres
+  enabled: false
+  #the name (prefixed with the Helm "release name") of a shared PVC (NFS or compatible) containing the JDBC Drivers
+  pvcName: jdbc-jar
+  # the available space on the NFS share. Note that making sure that the given amount of space is actually available is outside the responsibility of this Helm chart (in ONLY registers the PV & PVC!)
+  storageSize: 1Gi
+  # the sub-path in the NFS share to use. This path should be the parent directory path of 'jdbc' folder that you have created.
+  path: "/"
+  storageClassName: nfs
+
+logs:
+    #set to true to make the template register the NFS share whose endpoint info you need to provide here as a PV+PVC with the PVC name as specified above in logs.pvcName
+    #set to false (NOT recommended) to NOT have any logging go to NFS. This will only leave you with K8s logging to STDOUT (which is very limited) and make debugging difficult or impossible
+    enabled: true
+    # the name (prefixed with the Helm "release name") of a shared folder PVC (NFS or compatible) to which all components will write their logs
+    pvcName: logs
+    # the available space on the NFS share. Note that making sure that the given amount of space is actually available is outside the responsibility of this Helm chart (in ONLY registers the PV & PVC!)
+    storageSize: 5Gi
+    # the sub-path in the NFS share to use
+    path: "/"
+    # Name of the NFS storage class within OCP. Be sure the StorageClass supports ReadWriteMany. If not exists, fill in with "UNSET"
+     # NFS is used as ReadWriteMany file system for example to centralize logs.
+    # Besides NFS, some other distributed storage system could be used, like Ceph, Azure Files, Gluster...etc
+    # A valid StorageClass supporting RWX access mode must exist in advance.
+    storageClassName: nfs
+    # set to true to enable the redirection of all log files of our application to stdout/stderr (in addition to writing to the files)
+    # set to false for now because while the redirection of all log files to stdout/err is neat (since you wouldn't need a file share)
+    # for logs, it tends to overflow the default log handling of Docker/Kubernetes due to the sometimes heavy logging of some of our
+    # components.
+    redirectLogfiles: false
+    # since ARIS containers don't redirect all logs to stdout despite setting the above variable to true
+    # a new custom container which would just tail logs is used for tailing all logs to stdout
+    # set it to true if you want to tail all logs and for this please use fileshare as well
+    deployRedirectLogContainer: false
+    cpuLimit: "200m"
+    memoryLimit: "150Mi"
+
+# set to true if your are doing an update by "helm delete" followed by "helm install", and preservation of the PVCs
+isUpdate: false
+
+NODE_TOPOLOGY_KEY: "kubernetes.io/hostname"
+
+# Kubernetes node taints and tolerations. If you have tainted your kubernetes nodes, please set values for it
+tolerations:
+- key: "nodepool"
+  operator: "Equal"
+  value: "apiportal"
+  effect: "NoSchedule"
+
+# allowed value: apiportal
+product: apiportal
+
+#DO NOT MODIFY THIS SECTION
+products:
+  listOfApplications:
+    apiportal:
+      - accserver
+      - adsadmin
+      - api
+      - collaboration
+      - kibana
+      - portalserver
+      - tm
+      - umcadmin
+  imageBasePath:
+    apiportal: "softwareag/"
+  version:
+    apiportal: 10.0.14.70
+
+zookeeper:
+  # Docker image tag version for zookeeper
+  version: 10.0.14.70
+  service:
+    type: ClusterIP
+    # set to choose the desired nodeport if zookeeper.service.type is set to NodePort. Nodeports by default have to be in the range 30000-32767
+    # leave at "UNSET" to make K8s choose a nodeport for you (but of course only if zookeeper.service.type is set to NodePort)
+    nodePort: UNSET
+    port: 14281
+  storage:
+    #set to true if you want to use a volume claim template to provision storage for Zookeeper (using the "fast" storage class also created by this helm chart)
+    #if set to false, you need to provide the name of a PVC with pvcName below
+    useVolumeClaimTemplate: true
+    # Set this value to slow or fast. If you are using dev,qa,stage environment, then set it to slow. In pre-prod and prod environment set it to fast
+    classType: fast
+    #only used if useVolumeClaimTemplate == true, defines the size of the PVC created via the volume claim template
+    size: 5Gi
+    #only used if useVolumeClaimTemplate != true
+    pvcName: zookeeper-data
+    # Set to true if volume-date should be ephemeral, only for demo purposes!
+    useEmptyVolume: false
+  securityContext:
+    runAsUser: 0
+  sizing:
+    java:
+      Xmx: "48m"
+    resources:
+      requests:
+        memory: 192Mi
+        cpu: 100m
+postgres:
+  #set to false to NOT add a Postgres pod, but instead use an external DBMS (whose URL and credentials need then to be specified in the "externalDb" section below)
+  enabled: true
+  #Docker image tag version
+  version: 10.0.14.70
+  service:
+    #Default is "ClusterIP", to make PG available only internally. Can be set to "NodePort" or "LoadBalancer" if you want to make PG
+    #externally accessible (for debugging purposes etc.). In case you want to make it externally available, use "NodePort" if you are running
+    #this in a simple local cluster without loadbalancing services). Use "NodePort" or "LoadBalancer"
+    type: ClusterIP
+    # set to choose the desired nodeport if postgres.service.type is set to NodePort. Nodeports by default have to be in the range 30000-32767
+    # leave at "UNSET" to make K8s choose a nodeport for you (but of course only if postgres.service.type is set to NodePort)
+    nodePort: UNSET
+  storage:
+    #set to true if you want to use a volume claim template to provision storage for Postgres (using the "fast" storage class also created by this helm chart)
+    #if set to false, you need to provide the name of a PVC with pvcName below
+    useVolumeClaimTemplate: true
+    # Set this value to slow or fast. If you are using dev,qa,stage environment, then set it to slow. In pre-prod and prod environment set it to fast
+    storageClassName: fast
+    #only used if useVolumeClaimTemplate == true, defines the size of the PVC created via the volume claim template
+    size: 10Gi
+    #only used if useVolumeClaimTemplate != true
+    pvcName: postgres-data
+    # Set to true if volume-date should be ephemeral, only for demo purposes!
+    useEmptyVolume: false
+  healthCheck: /aris/container/checkReadiness.sh
+  securityContext:
+    runAsUser: 0
+  sizing:
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 250m
+
+# This section can be used to provide the endpoint information (i.e., hostname and port) and credentials of an SMTP server
+# The information is only used if "externalMailServer.enabled" is set to "true"
+externalMailServer:
+  enabled: false
+  host: "smtp.yourdomain.be"
+  #host: "smtp.sendgrid.net"
+  port: "587"
+  #set username and password to UNSET if your mail server does not use authentication
+  username: "UNSET"
+  #SMTP password in base64 encoded format
+  password: "UNSET"
+  #Valid values are UNSET, SSL or STARTTLS. set to UNSET if you don't want to use any form of transport encryption
+  tlsMode: "UNSET"
+  senderAddress: "noreply@yourdomain.be"
+
+
+cloudsearch:
+  replicas: 1
+  #Docker image tag version
+  version: 10.0.14.70
+  storage:
+    #set to true if you want to use a volume claim template to provision storage for Cloudsearch(using the "fast" storage class also created by this helm chart)
+    #if set to false, you need to provide the name of a PVC with pvcName below
+    # Note that if set to "false", you can use only one cloudsearch replica
+    useVolumeClaimTemplate: true
+    # Set this value to slow or fast. If you are using dev,qa,stage environment, then set it to slow. In pre-prod and prod environment set it to fast
+    storageClassName: fast
+    #only used if useVolumeClaimTemplate == true, defines the size of the PVC created via the volume claim template
+    size: 10Gi
+    #only used if useVolumeClaimTemplate != true
+    pvcName: cloudsearch-data
+    # Set to true if volume-date should be ephemeral, only for demo purposes!
+    useEmptyVolume: false
+  securityContext:
+    runAsUser: 0
+  sizing:
+    java:
+      Xmx: "512M"
+    resources:
+      requests:
+        memory: 768Mi
+        cpu: 500m
+
+elasticsearch:
+  # elasticsearch supports either 1 or 3 replicas. Use 3 for HA scenarios
+  replicas: 1
+  #Docker image tag version
+  version: 10.0.14.70
+  #Password for elasticsearch in bas64 encoded format
+  password: "Y2hhbmdlbWUK"
+  storage:
+    #set to true if you want to use a volume claim template to provision storage for Elasticsearch (using the "fast" storage class also created by this helm chart)
+    #if set to false, you need to provide the name of a PVC with pvcName below
+    useVolumeClaimTemplate: true
+    # Set this value to slow or fast. If you are using dev,qa,stage environment, then set it to slow. In pre-prod and prod environment set it to fast
+    storageClassName: fast
+    #only used if useVolumeClaimTemplate == true, defines the size of the PVC created via the volume claim template
+    size: 10Gi
+    #only used if useVolumeClaimTemplate != true
+    pvcName: elasticsearch-data
+    # Set to true if volume-date should be ephemeral, only for demo purposes!
+    useEmptyVolume: false
+  service:
+    #Default is "ClusterIP", to make Elasticsearch available only internally. Can be set to "NodePort" or "LoadBalancer" if you want to make PG
+    #externally accessible (for debugging purposes etc.). In case you want to make it externally available, use "NodePort" if you are running
+    #this in a simple local cluster without loadbalancing services) or "LoadBalancer"
+    type: ClusterIP
+    # only used - you guessed it - when service type is set to NodePort
+    # set to "UNSET" if you want to automatically assign the actual nodeport
+    nodePort: UNSET
+  backup:
+    # Enable backup or not for ES
+    enabled: false
+    #the name (prefixed with the Helm "release name") of a shared folder PVC (NFS or compatible) in which ES backups will be stored
+    pvcName: elastic-backup
+    # the available space on the NFS share. Note that making sure that the given amount of space is actually available is outside the responsibility of this Helm chart (in ONLY registers the PV & PVC!)
+    storageSize: 1Gi
+    # Number of snapshots that have to be retained
+    snapshotRetentionCount: 5
+    # the sub-path in the NFS share to use
+    path: "/"
+    # ES mountpoint internal to pod
+    mountPath: "/mnt"
+  sizing:
+    java:
+      Xmx: "256M"
+    resources:
+      requests:
+        memory: 512Mi
+        cpu: 500m
+
+loadbalancer:
+  replicas: 1
+  # Specify whether an OpenShift route should be created. This can only be created when your platform is OpenShift. If you don't use OpenShift, use the Ingress controller.
+  route:
+    enabled: true
+    tls:
+      enabled: false
+      # Put ssl certificate, ssl key and ca certificate in base64 encoding:
+      cert: "LS0tLS1.."
+      key: "LS0tLS1.."
+      cacert: "LS0tLS1.."
+  #externalFQDN: "UNSET"
+  externalFQDN: "developerss.yourdomain.be"
+  # Allows specifying a regex (in Apache-HTTPD-style) matching all those request source IP addresses from which to accept the
+  # X-Forwarded-* (X-Forwarded-For, X-Forwarded-Proto and X-Forwarded-Host) headers and the more recent standardized "Forwarded" header.
+  # Only for requests coming from remote IPs matching this regex an X-Forwarded-*/Forwarded header will be passed through to the application,
+  # for all other source IP addresses, the X-Forwarded-*/Forwarded header will be removed from the request.
+  trustedProxyRegex: ".*"
+  # Specify the external HTTP(S) (depending on what you set loadbalancer.externalScheme to) port of the ELB instance created for the loadbalancer (e.g., using Route 53)
+  # that you plan to map to the ELB instance created.
+  # If left at UNSET, the port will be the default port of the chosen scheme (i.e., port 80 in case externalScheme is "http", resp. port 443 in case externalScheme is "https")
+  externalPort: "80"
+  # Scheme to be used
+  externalScheme: "http"
+  service:
+    #Can be either "NodePort" (if you are running this in a simple local cluster without loadbalancing services) or "LoadBalancer"
+    # If you have set ingress to true, it will be treated as NodePort
+    type: "NodePort"
+    # do not change
+    port: 80
+    # for version 10.0.10.1 use 80
+    # for version 10.0.40.70 use 1080
+    targetPort: 1080
+    # only used - you guessed it - when service type is set to NodePort
+    # set to "UNSET" if you want to automatically assign the actual nodeport
+    nodePort: "UNSET"
+    # set to internal if you want to have a private IP as the ExternalIP. Else set to UNSET
+    lbType: "internal"
+    staticIP: "UNSET"
+  securityContext:
+    runAsUser: 0
+  sizing:
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 250m
+
+applications:
+# the values specified in the default section are used for any application for which no individual value is set
+  defaultPassword: manager
+  # Change the default application password for the system account in your password
+  # Password to be provided in base64 encoding
+  password: manager
+  default:
+    replicas: 1
+  license:
+    # Set to true if your own license is used, set to false if the trail license must be used.
+    useYourOwnLicense: true
+    # This is the name of the license file which must be put in the ./files folder of the Helm application
+    fileName: license.xml
+  accserver:
+    # -1 indicates that the value applications.default.replicas should be used as the initial number of replicas for this application
+    replicas: 1
+    # Intial delay seconds for liveness probe to begin
+    initialDelaySeconds: 60
+    # Health check url for the service
+    healthCheck: /aris/container/checkReadiness.sh
+    autoscale: false
+    maxReplica: 4
+    version: UNSET
+    app_type: acc
+    securityContext:
+      runAsUser: 0
+    sizing:
+      java:
+        Xmx: "192M"
+      tomcat:
+        connector:
+          http:
+            maxThreads: "25"
+          ajp:
+            maxThreads: "25"
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 75m
+          
+  adsadmin:
+    storage:
+      # #settings for the NFS share for document storage data.
+      # mode can be either "DB" or "fileShare".
+      #   in mode "DB", ADSAdmin will hold document content in the DB. While this is a bit easier to set up since you do not need to provide
+      #   an (N/E)FS share to hold document content, this setting should not be used for production environments.
+      #   In mode "fileShare" ADSAdmin will hold the ADS document on an NFS share, and requires the section nfs.adsdata above to be correctly filled out
+      #   and point to an (E/N)FS share that is accessible by all ADSAdmin instances
+      mode: "fileShare"
+      # Note that the next settings are only used if adsadmin.storage.mode is set to fileShare
+      # the name (prefixed with the Helm "release name") of a shared PVC (NFS or compatible) in which ADS will store documents
+      pvcName: adsdata
+      # the available space on the NFS share. Note that making sure that the given amount of space is actually available is outside the responsibility of this Helm chart (in ONLY registers the PV & PVC!)
+      storageSize: 2Gi
+      # the sub-path in the NFS share to use
+      path: "/"
+      # Name of the NFS storage class within OCP. Be sure the StorageClass supports ReadWriteMany. If not exists, fill in with "UNSET"
+      storageClassName: nfs
+    # -1 indicates that the value applications.default.replicas should be used as the initial number of replicas for this application
+    replicas: 1
+    # Initial delay seconds for the liveness probe to begin
+    initialDelaySeconds: 60
+    # Health check url for the service
+    healthCheck: /documents/static/adsadminStandalone/clear.cache.gif
+    autoscale: false
+    maxReplica: 4
+    version: UNSET
+    app_type: ads
+    securityContext:
+      runAsUser: 0
+    sizing:
+      java:
+        Xmx: "192M"
+      tomcat:
+        connector:
+          http:
+            maxThreads: "50"
+          ajp:
+            maxThreads: "50"
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 100m
+      
+  api:
+    # -1 indicates that the value applications.default.replicas should be used as the initial number of replicas for this application
+    replicas: 1
+    # Intial delay seconds for the liveness probe to begin
+    initialDelaySeconds: 900
+    # Health check url for the service
+    healthCheck: /abs/static/com.softwareag.copernicus.plugins.publishing.PublishingPlugin/clear.cache.gif
+    autoscale: false
+    maxReplica: 4
+    version: UNSET
+    app_type: abs
+    securityContext:
+      runAsUser: 0
+    sizing:
+      java:
+        Xmx: "1G"
+      tomcat:
+        connector:
+          http:
+            maxThreads: "50"
+          ajp:
+            maxThreads: "50"
+      resources:
+        requests:
+          memory: 1536Mi
+          cpu: 500m
+  collaboration:
+    # -1 indicates that the value applications.default.replicas should be used as the initial number of replicas for this application
+    replicas: 1
+    # Intial delay seconds for the liveness probe to begin
+    initialDelaySeconds: 300
+    # Health check url for the service
+    healthCheck: /collaboration/clear.cache.gif
+    autoscale: false
+    maxReplica: 4
+    version: UNSET
+    app_type: ecp
+    securityContext:
+      runAsUser: 0
+    sizing:
+      java:
+        Xmx: "512M"
+      tomcat:
+        connector:
+          http:
+            maxThreads: "50"
+          ajp:
+            maxThreads: "50"
+      resources:
+        requests:
+          memory: 768Mi
+          cpu: 100m
+  kibana:
+    # -1 indicates that the value applications.default.replicas should be used as the initial number of replicas for this application
+    replicas: 1
+    # Intial delay seconds for the liveness probe to begin
+    initialDelaySeconds: 600
+    # Health check url for the service
+    healthCheck: /aris/container/checkReadiness.sh
+    # Route Name : used for OpenShift Routes:
+    routeName: kibana
+    autoscale: false
+    maxReplica: 4
+    version: UNSET
+    app_type: kibana
+    securityContext:
+      runAsUser: 0
+    sizing:
+      java:
+        Xmx: "UNUSED"
+      tomcat:
+        connector:
+          http:
+            maxThreads: "UNUSED"
+          ajp:
+            maxThreads: "UNUSED"
+      resources:
+        requests:
+          memory: 512Mi
+          cpu: 250m
+  portalserver:
+    # -1 indicates that the value applications.default.replicas should be used as the initial number of replicas for this application
+    replicas: 1
+    # Initial delay seconds for the liveness probe to begin
+    initialDelaySeconds: 900
+    # Health check url of the service
+    healthCheck: /static/ping.bin
+    autoscale: false
+    maxReplica: 4
+    version: UNSET
+    app_type: cop
+    securityContext:
+      runAsUser: 0
+    sizing:
+      java:
+        Xmx: "192M"
+      tomcat:
+        connector:
+          http:
+            maxThreads: "10"
+          ajp:
+            maxThreads: "10"
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 100m
+  tm:
+    # -1 indicates that the value applications.default.replicas should be used as the initial number of replicas for this application
+    replicas: 1
+    # Initial delay seconds for the liveness probe to begin
+    initialDelaySeconds: 60
+    # Health check url of the service
+    healthCheck: /tm/
+    autoscale: false
+    maxReplica: 4
+    version: UNSET
+    app_type: tm
+    securityContext:
+      runAsUser: 0
+    sizing:
+      java:
+        Xmx: "192M"
+      tomcat:
+        connector:
+          http:
+            maxThreads: "25"
+          ajp:
+            maxThreads: "25"
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 75m
+  umcadmin:
+    # -1 indicates that the value applications.default.replicas should be used as the initial number of replicas for this application
+    replicas: 1
+    # Initial delay seconds for the liveness probe to begin
+    initialDelaySeconds: 60
+    # Health check url of the service
+    healthCheck: /umc/static/umcadminStandalone/clear.cache.gif
+    autoscale: false
+    maxReplica: 4
+    version: UNSET
+    app_type: umc
+    securityContext:
+      runAsUser: 0
+    sizing:
+      java:
+        Xmx: "192M"
+      tomcat:
+        connector:
+          http:
+            maxThreads: "25"
+          ajp:
+            maxThreads: "25"
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 75m
+    
+  apiportaltms:
+    # -1 indicates that the value applications.default.replicas should be used as the initial number of replicas for this application
+    replicas: 1
+    # Initial delay seconds for the liveness probe to begin
+    initialDelaySeconds: 60
+    # Health check url of the service
+    healthCheck: /tms/health
+    autoscale: false
+    maxReplica: 4
+    version: UNSET
+    app_type: apiportaltms
+    securityContext:
+      runAsUser: 0
+    sizing:
+      java:
+        Xmx: "300M"
+      tomcat:
+        connector:
+          http:
+            maxThreads: "25"
+          ajp:
+            maxThreads: "25"
+      resources:
+        requests:
+          memory: 450Mi
+          cpu: 75m
+apiproduct:
+  version: "10"
+  subVersionDbi: "5.0"
+  serviceRelease: "12"
+  build: "667"
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #  cpu: 100m
+  #  memory: 128Mi
+  # requests:
+  #  cpu: 100m
+  #  memory: 128Mi
+
+nodeSelector: {}
+
+affinity: {}

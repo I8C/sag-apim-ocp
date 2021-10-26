@@ -1,0 +1,68 @@
+{{- if eq .Values.applications.license.useYourOwnLicense true }}
+{{- if and ($.Release.IsInstall) (eq .Values.isUpdate false) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{$.Release.Name}}-import-license
+  labels:
+    job: {{ $.Release.Name }}-import-license
+    helm-release: {{ $.Release.Name }}
+spec:
+  # configurable number of retries with exponential back-off delay (10s, 20s, 40s, ...) with 6mins max
+  backoffLimit: {{ $.Values.jobs.backoffLimit }}
+  template:
+    spec:
+{{- if $.Values.tolerations }}
+      tolerations:
+{{ toYaml $.Values.tolerations | indent 8 }}
+{{- end }}
+      initContainers:
+      - name: waitforzookeeper
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-admin-tools:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{$.Values.image.pullPolicy | default "always" | quote}}
+        securityContext:
+          runAsUser: 0
+        command:
+          - bash
+          - -ec
+          - |
+{{ tpl ($.Files.Get "files/zkStatusCheck.sh") $ | indent 14 }}
+      containers:
+      - name: "admintools"
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-admin-tools:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{.Values.image.pullPolicy | default "Always" | quote}}
+        command: ["/bin/bash" ]
+        args: [ "-c", "printf '#!/bin/bash\nset -x\necho \"Uploading license file \" && \
+                              STATUS_CODE=$(curl --write-out %%{http_code} --silent --output /dev/null --form name=license.xml --form content=@/licenses/license.xml -XPOST http://{{$.Release.Name}}-loadbalancer:{{$.Values.loadbalancer.service.port}}/umc/api/licenses --basic -u system:\"'${APP_PASSWD}'\") \n \
+                              if [[ \"$STATUS_CODE\" -eq 200 ]] ; then \n \
+                                echo \"License file uploaded (status code 200)\" && exit 0 \n \
+                              elif [[ \"$STATUS_CODE\" -eq 500 ]] ; then \n \
+                                echo \"License file already uploaded before (status code 500)\" && exit 0 \n \
+                              else \n \
+                                echo \"File not uploaded, status code: $STATUS_CODE\" && exit -1 \n \
+                              fi ' \
+                              > uploadLicenseFile.sh; \
+                              chmod +x uploadLicenseFile.sh; \
+                              /aris/container/retry.sh {{$.Values.jobs.internalRetry.maxRetries }} {{$.Values.jobs.internalRetry.waitTimeSec }} timeout 60 ./uploadLicenseFile.sh; "]
+        securityContext:
+          runAsUser: 0
+        env:
+        - name: APP_PASSWD
+          valueFrom:
+            secretKeyRef:
+              name: {{ $.Release.Name }}-app-secrets
+              key: app_passwd
+        volumeMounts:
+        - name: license-volume
+          mountPath: /licenses
+      restartPolicy: OnFailure
+      volumes:
+      - name: license-volume
+        configMap:
+          name: {{$.Release.Name}}-portal-license
+{{- if eq $.Values.image.servicePrincipal false }}
+      imagePullSecrets:
+      - name: {{ $.Values.image.registrySecret }}
+{{- end }}
+{{- end }}
+{{- end }}

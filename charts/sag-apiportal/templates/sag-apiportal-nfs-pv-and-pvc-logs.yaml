@@ -1,0 +1,19 @@
+
+# provisions an NFS-based PV and associated PVC for the logs (N/E)FS share
+# using the endpoint info given in the logs.* section of values.yaml
+{{- if eq .Values.logs.enabled true}}
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: {{ .Release.Name }}-{{ .Values.logs.pvcName}}
+  labels: 
+    product: "softwareag-{{ .Values.product}}"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: {{ .Values.logs.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.logs.storageSize }}
+{{- end }}

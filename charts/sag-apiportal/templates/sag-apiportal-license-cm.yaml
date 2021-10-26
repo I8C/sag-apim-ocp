@@ -1,0 +1,9 @@
+{{- if eq .Values.applications.license.useYourOwnLicense true }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{$.Release.Name}}-portal-license
+data:
+  license.xml: |
+{{ printf "files/%s" .Values.applications.license.fileName | .Files.Get | indent 4 }}
+{{- end -}}

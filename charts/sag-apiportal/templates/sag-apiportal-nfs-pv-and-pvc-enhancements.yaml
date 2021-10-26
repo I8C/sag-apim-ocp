@@ -1,0 +1,15 @@
+{{- if (eq true .Values.enhancements.enabled) }}
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: {{ .Release.Name }}-{{ .Values.enhancements.pvcName }}
+  labels:
+    product: "softwareag-{{ .Values.product }}"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: {{ .Values.enhancements.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.enhancements.storageSize }}
+{{- end }}

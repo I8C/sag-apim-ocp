@@ -1,0 +1,205 @@
+# statefulset and service for the first and only Zookeeper instance of a
+# single-node ensemble
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{.Release.Name}}-zookeeper
+  labels:
+    app: {{.Release.Name}}-zookeeper
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      product: "softwareag-{{.Values.product}}"
+      app: "{{.Release.Name}}-zookeeper"
+      zookeeper-az: {{.Release.Name}}-az1
+  serviceName: {{.Release.Name}}-zookeeper 
+  template:
+    metadata:
+      labels:
+        product: "softwareag-{{.Values.product}}"
+        app: "{{.Release.Name}}-zookeeper"
+        zookeeper-az: "{{.Release.Name}}-az1"
+{{- if .Values.monitoring }}
+      annotations:
+         prometheus.io/scrape: "true"
+         prometheus.io/path: /metrics
+         prometheus.io/port: "9601"
+{{- end }}
+    spec:
+{{- if $.Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml $.Values.nodeSelector | indent 8 }}
+{{- end }}
+{{- if $.Values.tolerations }}
+      tolerations:
+{{ toYaml $.Values.tolerations | indent 8 }}
+{{- end }}
+      containers:
+      - name: zookeeper
+# AWS-specific way to obtain image URI, where part of the "path" depends on the product
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-zookeeper:{{ .Values.zookeeper.version }}
+        imagePullPolicy: {{.Values.image.pullPolicy | default "always" }}
+{{- if $.Values.zookeeper.securityContext }}
+        securityContext:
+{{ toYaml $.Values.zookeeper.securityContext | indent 10 }}
+{{- end }}
+        env:
+        - name: zookeeper_server_1
+          value: "0.0.0.0:14285:14290"  
+        - name: zookeeper_myid
+          value: "1"
+        - name:  REDIRECT_LOGFILES
+          value: {{ $.Values.logs.redirectLogfiles | quote }}
+{{- if .Values.monitoring }}
+        - name: ENABLE_PROMETHEUS_AGENT
+          value: "true"
+{{- end }}
+{{- if (ne "UNSET" (index $.Values "zookeeper" "sizing" "java" "Xmx"))  }}
+        - name: Xmx
+          value: {{ (index $.Values "zookeeper" "sizing" "java" "Xmx") | quote }}
+{{- end }}
+        ports:
+        - containerPort: 14281
+          name: client-port
+        - containerPort: 14285
+          name: server-port
+        - containerPort: 14290
+          name: election-port
+{{- if .Values.monitoring }}
+        - containerPort: 9601
+          name: prometheus-port
+{{- end }}
+        livenessProbe:
+           exec:
+             command:
+             - sh
+             - -c
+             - echo ruok | nc localhost 14281 | grep imok
+           failureThreshold: 3
+           initialDelaySeconds: 30
+           periodSeconds: 30
+           successThreshold: 1
+           timeoutSeconds: 5
+        readinessProbe:
+           exec:
+             command:
+             - sh
+             - -c
+             - echo ruok | nc localhost 14281 | grep imok
+           failureThreshold: 3
+           initialDelaySeconds: 10
+           periodSeconds: 30
+           successThreshold: 1
+           timeoutSeconds: 5
+        volumeMounts:
+            - mountPath: /zookeeper_data
+              name: data-volume          
+              subPath: zookeeper1
+{{- if eq .Values.logs.enabled true }}
+            - mountPath: /zookeeper_logs
+              name: logs-volume          
+              subPath: zookeeper/zookeeper1
+{{- end }}          
+        resources:
+          requests:
+            memory: {{ (index $.Values "zookeeper" "sizing" "resources" "requests" "memory" ) | quote }}
+            cpu: {{ (index $.Values "zookeeper"  "sizing" "resources" "requests" "cpu" ) | quote }}
+{{- if  and (eq $.Values.logs.deployRedirectLogContainer true) (eq $.Values.logs.enabled true) }}
+      - name: "zookeeperlogs"
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}redirect-logs:{{ index $.Values "products" "version" $.Values.product }}
+        imagePullPolicy: {{ $.Values.image.pullPolicy | default "always" | quote }}
+        command:
+          - bash
+          - -ec
+          - |
+              exec /consolelog.sh
+        env:
+        - name: app_type
+          value: zookeeper
+        - name: instance_id
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+          - mountPath: /logs
+            name: logs-volume
+        resources:
+           requests:
+             memory: "50Mi"
+             cpu: "50m"
+           limits:
+             memory: {{ $.Values.logs.memoryLimit | quote }}
+             cpu: {{ $.Values.logs.cpuLimit | quote }}
+{{- end }}
+{{- if eq $.Values.image.servicePrincipal false }}
+      imagePullSecrets:
+      - name: {{.Values.image.registrySecret}}
+{{- end }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                  - key: app  
+                    operator: In
+                    values:
+                    - {{.Release.Name}}-zookeeper
+                topologyKey: {{.Values.NODE_TOPOLOGY_KEY | default "kubernetes.io/hostname" | quote}}
+      volumes:
+{{- if eq .Values.logs.enabled true }}      
+      - name: logs-volume
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}-{{ .Values.logs.pvcName}}
+{{- end }}          
+{{- if ne true .Values.zookeeper.storage.useVolumeClaimTemplate }}
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: {{.Values.zookeeper.storage.pvcName}}
+{{- else if .Values.zookeeper.storage.useEmptyVolume }}
+      - name: data-volume
+        emptyDir: {}
+{{- else }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data-volume
+        labels:
+          product: "softwareag-{{.Values.product}}"
+          app: "{{.Release.Name}}-zookeeper"
+          helm-release: "{{.Release.Name}}"
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: {{ $.Release.Name }}-{{ $.Values.zookeeper.storage.storageClassName }}
+        resources:
+          requests:
+            storage: {{.Values.zookeeper.storage.size | default "4Gi" | quote}}  
+{{- end }}
+
+
+# this is the SINGLE nodeport (or ClusterIP) service under which all cluster instances (only one in this case) are available for ZK CLIENTS with a stable hostname AND, if service type is NodePort, as a bonus are also available on the cluster nodes (for debugging only ;-))
+---
+kind: Service
+apiVersion: v1
+metadata:
+# Idea: prefix the service name (=DNS name!) of Zookeeper with the Helm Release name, and pass that also as zookeeper.connect.string to all applications - that way we can run multiple ARIS installations in the same Namespace :-)
+  name: {{.Release.Name}}-zookeeper
+spec:
+  type: {{.Values.zookeeper.service.type | default "ClusterIP" }}
+  selector:
+    app: {{.Release.Name}}-zookeeper
+    product: "softwareag-{{.Values.product}}"
+  ports:
+  - name: zookeeper-client-port
+    protocol: TCP
+    port: {{.Values.zookeeper.service.port | default 14281}}
+    targetPort: 14281
+{{- if and (ne .Values.zookeeper.service.nodePort "UNSET") (eq .Values.zookeeper.service.type "NodePort") }}
+    nodePort: {{.Values.zookeeper.service.nodePort | default 30281 }}      
+{{- end }}
+{{- if .Values.monitoring }}
+  - name: prometheus-port
+    protocol: TCP
+    port: 9601
+    targetPort: 9601
+{{- end }} 
+

@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-env-conf
+data:
+  jvm_opts: "-Dcom.aris.umc.audit.log.user.group.enabled=false \
+    -Dcom.aris.umc.audit.log.auth.enabled=false \
+    -Dcom.aris.umc.audit.enabled=false \
+    -Dcom.aris.umc.notification.passwordChanged.subject=\"Your password was changed\" \
+    -Dcom.aris.umc.notification.passwordChanged.message=\"Dear @user.givenName,\n\nYou have recently changed the password that is associated with your API Portal account (@user.login). \n\nIf you did not make any such change and now believe that your account may be compromised, please contact the support team immediately. \n\n User name: @user.login\n\n New password: @user.password\n\nBest Regards,\nAPI Portal Team\n\n*** This notification was sent automatically. Do not reply to this email.***\" \
+    -Dcom.aris.umc.notification.passwordResetRequested.subject=\"Reset API Portal password\" \
+    -Dcom.aris.umc.notification.passwordResetRequested.message=\"Dear @user.givenName,\n\nSomeone (maybe you) has requested a reset of your API Portal password. Please click the following link to confirm the password reset:\n\n@property.com.aris.umc.loadbalancer.url/#@tenant.name/resetpassword/a.b.c/umc.sessionid.@user.token\nPlease perform this confirmation within @property.com.aris.umc.password.reset.confirmation.ttl minutes. Confirm only once. Ignore this e-mail if you have not submitted any request. \n\nBest Regards,\nAPI Portal Team\n\n*** This notification was sent automatically. Do not reply to this email.***\" \
+    -Dcom.aris.umc.notification.passwordReset.subject=\"Your new API Portal password\" \
+    -Dcom.aris.umc.notification.passwordReset.message=\"Dear @user.givenName,\n\nYou have reset your password. \nPlease log in to @property.com.aris.umc.loadbalancer.url/#@tenant.name/userProfile using the following login information in order to access your data:\n\n User name: @user.login\n\n New password: @user.password\n\nBest Regards,\nAPI Portal Team\n\n*** This notification was sent automatically. Do not reply to this email.***\" \
+    -Dcom.aris.umc.notification.userCreated.enabled=false \
+    -Dcom.aris.umc.notification.otpRequested.message=\"Dear @user.givenName,\n\nYou have requested a one-time password for your account: \n\n\tTenant: @tenant.name \n\n\tUser name: @user.login\n\n\tOne-time password: @user.password\n\nUse the one-time password within 30 seconds. Ignore this e-mail if you have not submitted any request.\n\nBest regards,\nAPI Portal team\n\n*** This notification was sent automatically by API Management Solutions powered by webMethods. Please do not reply to this e-mail.***\" \
+    -Dcom.aris.umc.notification.otpSecretChanged.enabled=false \
+    -Dcom.aris.umc.notification.signupCompleted.enabled=false \
+    -Dcom.aris.umc.notification.otpSecretChanged.subject=\"Your new secret token\" \
+    -Dcom.aris.umc.notification.otpSecretChanged.message=\"Dear @user.givenName,\n\nYour new secret token is generated.\n\n\tTenant: @tenant.name \n\n\tUser name: @user.login\n\n\tToken secret: @user.otpSecret\n\nUse the token secret to set up your one-time password.\n\nBest regards,\nAPI Portal team\n\n*** This notification was sent automatically by API Management Solutions powered by webMethods. Please do not reply to this e-mail.***\" \
+    -Dcom.aris.umc.oauth.enabled=true \
+    -Dcom.aris.umc.service.multitenant=true \
+    -Dcom.aris.umc.notification.smtp.authentication=true \
+    -Dcom.aris.umc.notification.smtp.ssl.mode=SSL \
+    -DapiPortal.license.path=\"/apiportal-metering/license.xml\" \
+    -Dcom.aris.umc.saml.extension.assertion.querystring=true \
+    -Dcom.aris.umc.saml.extension.enable=true \
+    -Dcom.aris.umc.saml.extension.fname.attributeName=firstName \
+    -Dcom.aris.umc.saml.extension.lname.attributeName=lastName \
+    -Dcom.aris.umc.saml.extension.email.attributeName=email \
+    -Dcom.aris.umc.saml.extension.subdomain.attributeName=subdomain \
+    -Dcom.aris.umc.saml.extension.roles.attributeName=APICloudAccessPermissionsSet \
+    -Dcom.aris.umc.saml.extension.roles=com.aris.apiportal.config.APIPortalRoleResolver \
+    -Dcom.aris.umc.saml.extension.cookie.domain=webmethods-dev.io \
+    -DapiPortal.path=/aris \
+    -Dportal.ssl.trust.all.enable=false \
+    -Dportal.tryout.enable.local.ips=false \
+    -Dinstallation.type=API_PORTAL \
+    -Dcom.softwareag.copernicus.engine.server.clientEngineSettings.considerTenantSubDomains=true \
+    -Dportal.tryout.enable.local.ips=false"
+  apiportaltms: |
+    -Dspring.config.location=/opt/softwareag/tms/application.yml
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $.Release.Name }}-portal-version
+data:
+  version.txt: |
+    product.Name=API Portal
+    product.Id=YAP
+    product.Version={{ .Values.apiproduct.version }}
+    product.Subversion.DBI={{ .Values.apiproduct.subVersionDbi }}
+    product.ServiceRelease={{ .Values.apiproduct.serviceRelease }}
+    product.Build={{ .Values.apiproduct.build }}
+

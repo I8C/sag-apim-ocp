@@ -1,0 +1,198 @@
+# Sample values for apigateway.
+# This helm chart deploys a kubernetes deployment for an apigateway and a matching service.
+# This is a YAML-formatted file.
+
+replicas: 1
+
+
+labels:
+  tuned.openshift.io/elasticsearch: ""
+
+image:
+  # use of dockerhub/store registry to pull API Portal images from.
+  registry: store
+  # Use the url pointing to your repository.
+  repository: softwareag/apigateway-trial
+  # Image version relates to the SAG APIM version
+  tag: 10.7
+      # The default pull policy is IfNotPresent which causes the Kubelet to skip pulling an image if it already exists.
+      # If you would like to always force a pull use "Always"
+  pullPolicy: IfNotPresent
+  # Name of the Docker Registry Secret to pull the image from the dockerhub/store. This is only used when servicePrincipal is set to false
+  # This secret must exist in advance, before installing the chart
+  registrySecret: regsecret
+
+## Settings for the Integration Server
+is:
+  # Specify whether an OpenShift route should be created. This can only be created when your platform is OpenShift. If you don't use OpenShift, use the Ingress controller.
+  route:
+    enabled: true
+    tls:
+      enabled: false
+      # Put ssl certificate, ssl key and ca certificate in base64 encoding:
+      cert: "LS0tLS1..."
+      key: "LS0tLS1..."
+      cacert: "LS0tLS1...."
+  #externalFQDN: "apiportal.gateway.webmcloud.com"
+  #externalFQDN: "localhost"
+  #externalFQDN: "UNSET"
+  externalFQDN: "api.yourdomain.be"
+  # Specify the external HTTP(S) (depending on what you set loadbalancer.externalScheme to) port of the ELB instance created for the loadbalancer (e.g., using Route 53)
+  # that you plan to map to the ELB instance created.
+  # If left at UNSET, the port will be the default port of the chosen scheme (i.e., port 80 in case externalScheme is "http", resp. port 443 in case externalScheme is "https")
+  externalPort: "443"
+  # Scheme to be used
+  externalScheme: "https"
+  service:
+    #Can be either "NodePort" (if you are running this in a simple local cluster without loadbalancing services) or "LoadBalancer"
+    type: "NodePort"
+    # do not change
+    port: 5555
+    # Port of Integration Server used in the Docker image. Default port is: 5555
+    targetPort: 5555
+    # only used - you guessed it - when service type is set to NodePort
+    # set to "UNSET" if you want to automatically assign the actual nodeport
+    nodePort: "UNSET"
+    # set to internal if you want to have a private IP as the ExternalIP. Else set to UNSET
+    lbType: "internal"
+    staticIP: "UNSET"
+
+
+# API Gateway settings
+apigateway:
+  # Specify whether an OpenShift route should be created. This can only be created when your platform is OpenShift. If you don't use OpenShift, use the Ingress controller.
+  route:
+    enabled: true
+    tls:
+      enabled: false
+      # Put ssl certificate, ssl key and ca certificate in base64 encoding:
+      cert: "LS0tLS1..."
+      key: "LS0tLS1..."
+      cacert: "LS0tLS1...."
+  #externalFQDN: "apiportal.gateway.webmcloud.com"
+  #externalFQDN: "localhost"
+  #externalFQDN: "UNSET"
+  externalFQDN: "sag-gw-ui.yourdomain.be"
+  # Specify the external HTTP(S) (depending on what you set loadbalancer.externalScheme to) port of the ELB instance created for the loadbalancer (e.g., using Route 53)
+  # that you plan to map to the ELB instance created.
+  # If left at UNSET, the port will be the default port of the chosen scheme (i.e., port 80 in case externalScheme is "http", resp. port 443 in case externalScheme is "https")
+  externalPort: "443"
+  # Scheme to be used
+  externalScheme: "https"
+  service:
+    #Can be either "NodePort" (if you are running this in a simple local cluster without loadbalancing services) or "LoadBalancer"
+    type: "NodePort"
+    port: 9072
+    targetPort: 9072
+    # only used - you guessed it - when service type is set to NodePort
+    # set to "UNSET" if you want to automatically assign the actual nodeport
+    nodePort: "UNSET"
+    # set to internal if you want to have a private IP as the ExternalIP. Else set to UNSET
+    lbType: "internal"
+    staticIP: "UNSET"
+  securityContext:
+    runAsUser: 1724
+    runAsGroup: 1724
+  logs:
+   # The mountpoint for the logs share
+    path: /opt/softwareag/IntegrationServer/instances/default/logs
+    #set to true to make the template register the NFS share whose endpoint info you need to provide here as a PV+PVC with the PVC name as specified above in logs.pvcName
+    #set to false to NOT have any logging go to NFS but instead log to stdout and container filesystem. This will only leave you with K8s logging to STDOUT (which is very limited) and make debugging difficult or impossible
+    enabled: true
+    # the name (prefixed with the Helm "release name") of a shared folder PVC (NFS or compatible) to which all components will write their logs
+    pvcName: logs
+    # the available space on the NFS share. Note that making sure that the given amount of space is actually available is outside the responsibility of this Helm chart (in ONLY registers the PV & PVC!)
+    storageSize: 1Gi
+    # Name of the StorageClassName. The SC must support RWX access mode!
+    storageClassName: nfs
+  license:
+    # Set to true if your own license is used, set to false if the trail license must be used.
+    useYourOwnLicense: false
+    # This is the name of the license file which must be put in the ./files folder of the Helm application
+    fileName: license.xml
+    # Name of the path where to mount the licenseKey file to within the API Gateway container.
+    mountPath: /opt/licenses/license.xml
+
+# Setttings fot the embedded ElasticSearch Instance
+elasticsearch:
+  config:
+    #path: /usr/share/elasticsearch/config # used if using packaged elasticsearch   
+    path: /opt/softwareag/InternalDataStore/config
+  data:
+    path: /apigw-data
+  storage:
+    #set to true if you want to use a volume claim template to provision storage for elasticsear (using the storage class provided in one of the next configuration settings)
+    #if set to false, you need to provide the name of a PVC with pvcName below
+    useVolumeClaimTemplate: true
+    storageClassName: thin
+    #only used if useVolumeClaimTemplate == true, defines the size of the PVC created via the volume claim template
+    size: 5Gi
+    #only used if useVolumeClaimTemplate != true and useEmptyVolume != true
+    pvcName: apigw-data
+    # Set to true if volume-date should be ephemeral, only for demo purposes! If set to true, this will overrule the useVolumeClaimTemplate and pvcName settings
+    useEmptyVolume: true
+  logs:
+    path: /opt/softwareag/InternalDataStore/logs
+    #path: /usr/share/elasticsearch/logs # used if using packaged elasticsearch   
+  archive:
+    # path: /usr/share/elasticsearch/archives # used if using packaged elasticsearch
+    path: /opt/softwareag/InternalDataStore/archives
+  service:
+    #Can be either "NodePort" (if you are running this in a simple local cluster without loadbalancing services) or "LoadBalancer"
+    type: "NodePort"
+    # do not change
+    port: 9200
+    targetPort: 9200
+    # only used - you guessed it - when service type is set to NodePort
+    # set to "UNSET" if you want to automatically assign the actual nodeport
+    nodePort: "UNSET"
+    # set to internal if you want to have a private IP as the ExternalIP. Else set to UNSET
+    lbType: "internal"
+    staticIP: "UNSET"
+
+# Define here the securityContext on pod-level
+podSecurityContext:
+  fsGroup: 1724
+
+# Specify node if you need to run the Pod on a specific node
+#nodeName: id-worker2-ocp1-id.internal
+
+# Use only elasticsearch_external, elasticsearch_sidecar or elasticsearch_embedded,
+# Depending on your environment and intentions.
+# Replaced the sample data with the one that suits your environment.
+
+#Datas to reach your external elasticsearch.
+    # Url pointing to your running elasticsearch for example: 127.0.0.1:9200
+    # Use true if your elasticsearch has https enabled, false if not.
+    # Fill in your elasticsearch username for example: elastic
+    # Fill in your elasticsearch password for example: changeme
+#Elasticsearch_external:
+#    host: "<UrlToYourExternalElasticsearch>:<elasticsearchPort>"
+#    https: <"false" or "true">
+#    username: <elasticsearchUsername>
+#    password: <elasticsearchPassword>
+
+# Docker image for elasticsearch. Default is: docker.elastic.co/elasticsearch/elasticsearch:5.6.4
+elasticsearch_sidecar:
+    image: docker.elastic.co/elasticsearch/elasticsearch
+    tag: 7.2.0
+
+# Port of the embedded elasticsearch used inside off the container. Default is: 9240
+#elasticsearch_embedded:
+#    port: 9240
+
+# If a terracotta_host is set, the api gateway(s) will try to connect them to the terracotta host and cluster them.
+# Please be aware that the terracotta license have to be available in die docker image of the apiGateway.
+# This will only work with an external elasticsearch
+# Terracotta_host: "terracottahost:9510"
+
+# Since version 10.7, the API Gateway requires at least 4Gi of memory, otherwise the InternalDataStore does not start.
+resources:
+  requests:
+    memory: 4Gi
+    
+nodeSelector: {}
+  
+tolerations: []
+
+affinity: {}

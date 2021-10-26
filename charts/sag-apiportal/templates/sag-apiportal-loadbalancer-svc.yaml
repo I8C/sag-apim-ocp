@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{.Release.Name}}-loadbalancer
+  labels:
+    app: {{.Release.Name}}-loadbalancer
+spec:
+{{- if eq .Values.ingress.enabled false }}
+  type:  {{.Values.loadbalancer.service.type | default "NodePort" }}
+{{- if and (eq .Values.loadbalancer.service.type "LoadBalancer") (ne $.Values.loadbalancer.service.staticIP "UNSET") }}
+  loadBalancerIP: {{ $.Values.loadbalancer.service.staticIP }}
+{{- end }}
+{{- else }}
+  type: NodePort
+{{- end }}
+  selector:
+    app: {{.Release.Name}}-loadbalancer
+  ports:
+  - protocol: TCP
+    port: {{.Values.loadbalancer.service.port | default 80 }} 
+    targetPort: {{.Values.loadbalancer.service.targetPort | default 80 }} 
+{{- if and (ne .Values.loadbalancer.service.nodePort "UNSET") (eq .Values.loadbalancer.service.type "NodePort") }}
+    nodePort: {{.Values.loadbalancer.service.nodePort }}  
+{{- end }}

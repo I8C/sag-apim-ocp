@@ -1,0 +1,168 @@
+#Deployment and ClusterIP service for Postgres. 
+#DO NOT SCALE THIS DEPLOYMENT!
+{{- if eq .Values.postgres.enabled true}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{.Release.Name}}-postgres
+  labels:
+    app: {{.Release.Name}}-postgres
+spec:
+  #DO NOT SCALE THIS DEPLOYMENT!
+  replicas: 1
+  selector:
+    matchLabels:
+      product: "softwareag-{{.Values.product}}"
+      app: {{.Release.Name}}-postgres
+  serviceName: "{{.Release.Name}}-postgres"
+  template:
+    metadata:
+      labels:
+        product: "softwareag-{{.Values.product}}"
+        app: {{.Release.Name}}-postgres
+    spec:
+{{- if $.Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml $.Values.nodeSelector | indent 8 }}
+{{- end }}
+{{- if $.Values.tolerations }}
+      tolerations:
+{{ toYaml $.Values.tolerations | indent 8 }}
+{{- end }}
+      containers:
+      - name: postgres
+        image: {{ $.Values.image.registry }}/{{ index $.Values "products" "imageBasePath" $.Values.product }}aris-postgres:{{ .Values.postgres.version }}
+        imagePullPolicy: {{.Values.image.pullPolicy | default "always" | quote}}
+{{- if $.Values.postgres.securityContext }}
+        securityContext:
+{{ toYaml $.Values.postgres.securityContext | indent 10 }}
+{{- end }}
+        env:
+        - name: zookeeper_connect_string
+          value: {{.Release.Name}}-zookeeper:{{.Values.zookeeper.service.port | default 14281}}
+        - name: HOSTNAME
+          valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+        - name:  REDIRECT_LOGFILES
+          value: {{ $.Values.logs.redirectLogfiles | quote }}
+        ports:
+        - containerPort: 5432
+          name: postgres-port
+{{- if .Values.monitoring }}
+        - name: prometheus-port
+          containerPort: 9601
+{{- end }}
+        livenessProbe:
+           exec:
+             command:
+             - {{ .Values.postgres.healthCheck }}
+           failureThreshold: 3
+           initialDelaySeconds: 30
+           periodSeconds: 30
+           successThreshold: 1
+           timeoutSeconds: 5
+        readinessProbe:
+           exec:
+             command:
+             - {{ .Values.postgres.healthCheck }}
+           failureThreshold: 3
+           initialDelaySeconds: 10
+           periodSeconds: 30
+           successThreshold: 1
+           timeoutSeconds: 5
+        resources:
+          requests:
+            memory: {{ (index $.Values "postgres" "sizing" "resources" "requests" "memory" ) | quote }}
+            cpu: {{ (index $.Values "postgres"  "sizing" "resources" "requests" "cpu" ) | quote }}
+        volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: data-volume          
+              subPath: pg_data
+            - mountPath: /aris/zkc
+              name: data-volume          
+              subPath: pg_zkc
+{{-  if eq .Values.logs.enabled true }}
+            - mountPath: /logs
+              name: logs-volume
+            - mountPath: /var/log/postgresql
+              name: logs-volume
+              subPath: pg_var_logs
+{{- end }}              
+        resources:
+          requests:
+            memory: {{ (index $.Values "postgres" "sizing" "resources" "requests" "memory" ) | quote }}
+            cpu: {{ (index $.Values "postgres"  "sizing" "resources" "requests" "cpu" ) | quote }}
+{{- if eq $.Values.image.servicePrincipal false }}
+      imagePullSecrets:
+      - name: {{.Values.image.registrySecret}}
+{{- end }}
+      affinity:
+        #since we have only one PG instance, it makes little sense to have an anti-affinity... 
+        # but let's use a preferredDuringSchedulingIgnoredDuringExecution (NOT requiredDuring...) to keep PG on a different node than CS.
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app  
+                  operator: In
+                  values:
+                  - cloudsearch
+              topologyKey: {{.Values.NODE_TOPOLOGY_KEY | default "kubernetes.io/hostname" | quote}}
+      volumes:
+{{-  if eq .Values.logs.enabled true }}      
+      - name: logs-volume
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}-{{ .Values.logs.pvcName}}
+{{- end }}
+{{- if and (eq false .Values.postgres.storage.useVolumeClaimTemplate) (eq false .Values.postgres.storage.useEmptyVolume) }}
+        persistentVolumeClaim:
+          claimName: ${.Values.postgres.storage.pvcName}
+{{- else if .Values.postgres.storage.useEmptyVolume }}
+      - name: data-volume
+        emptyDir: {}
+{{- else }}          
+  volumeClaimTemplates:
+    - metadata:
+        name: data-volume
+        labels:
+          product: "softwareag-{{.Values.product}}"
+          app: "{{.Release.Name}}-postgres"
+          helm-release: "{{.Release.Name}}"
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: {{ $.Release.Name }}-{{ $.Values.postgres.storage.storageClassName }}
+        resources:
+          requests:
+            storage: {{.Values.postgres.storage.size | default "10Gi" | quote}}
+{{- end }}
+        
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: {{.Release.Name}}-postgres
+spec:
+  type: {{.Values.postgres.service.type | default "ClusterIP" }}
+  clusterIP: None
+  selector:
+    app: {{.Release.Name}}-postgres
+    product: "softwareag-{{.Values.product}}"
+  ports:
+  - name: postgres-port
+    protocol: TCP
+    port: 5432
+    targetPort: 5432
+{{- if and (ne .Values.postgres.service.nodePort "UNSET") (eq .Values.postgres.service.type "NodePort") }}
+    nodePort: {{.Values.postgres.service.nodePort | default 30543 }}  
+{{- end }}
+{{- if .Values.monitoring }}
+  - name: prometheus-port
+    protocol: TCP
+    port: 9601
+    targetPort: 9601
+{{- end }}
+---
+{{- end }}
